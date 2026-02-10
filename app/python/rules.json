@@ -1,0 +1,33 @@
+[
+  {
+    "id": "not_empty_account",
+    "name": "Account must be filled",
+    "type": "not_empty",
+    "column": "Account"
+  },
+  {
+    "id": "amount_range",
+    "name": "Amount must be between 0 and 100000",
+    "type": "number_range",
+    "column": "Amount",
+    "min": 0,
+    "max": 100000
+  },
+  {
+    "id": "type_allowed",
+    "name": "Type must be one of A, B, C",
+    "type": "allowed_values",
+    "column": "Type",
+    "allowed": ["A", "B", "C"]
+  },
+  {
+    "id": "conditional_zyz_b_required",
+    "name": "If A is ZYZ then B is required",
+    "type": "conditional_required",
+    "column": "B",
+    "when_column": "A",
+    "when_operator": "equals",
+    "when_equals": "ZYZ",
+    "then_column": "B"
+  }
+]
