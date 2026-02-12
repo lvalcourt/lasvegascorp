@@ -1,0 +1,71 @@
+name: Build Installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            electron_script: dist:win
+            artifact_name: windows-installers
+          - os: ubuntu-latest
+            electron_script: dist:linux
+            artifact_name: linux-installers
+
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/electron/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/python/requirements.txt pyinstaller
+
+      - name: Build Python backend executable
+        run: |
+          pyinstaller \
+            --onefile \
+            --name lasvegarscorp-backend \
+            --distpath app/python/dist \
+            --workpath app/python/build/pyinstaller \
+            --specpath app/python/build/pyinstaller \
+            app/python/run_server.py
+
+      - name: Install Electron dependencies
+        working-directory: app/electron
+        run: npm ci
+
+      - name: Build installer
+        working-directory: app/electron
+        run: npm run ${{ matrix.electron_script }}
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: app/electron/release

@@ -10,6 +10,11 @@ __pycache__/
 # Build
 build/
 dist/
+release/
+app/electron/release/
+app/python/dist/
+app/python/build/
+app/python/reports/
 
 # OS
 .DS_Store

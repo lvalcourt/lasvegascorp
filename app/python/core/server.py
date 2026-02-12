@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -23,8 +24,10 @@ app.add_middleware(
 )
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-RULES_PATH = ROOT_DIR / "rules.json"
-REPORTS_DIR = ROOT_DIR / "reports"
+DATA_DIR = Path(os.getenv("LASVEGASCORP_DATA_DIR", str(ROOT_DIR)))
+DEFAULT_RULES_PATH = Path(os.getenv("LASVEGASCORP_DEFAULT_RULES_PATH", str(ROOT_DIR / "rules.json")))
+RULES_PATH = DATA_DIR / "rules.json"
+REPORTS_DIR = DATA_DIR / "reports"
 
 
 class Rule(BaseModel):
@@ -58,7 +61,11 @@ class ValidationResponse(BaseModel):
 
 def ensure_rules_file() -> None:
     if not RULES_PATH.exists():
-        RULES_PATH.write_text("[]", encoding="utf-8")
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if DEFAULT_RULES_PATH.exists():
+            RULES_PATH.write_text(DEFAULT_RULES_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+        else:
+            RULES_PATH.write_text("[]", encoding="utf-8")
 
 
 def load_rules() -> List[Rule]:
