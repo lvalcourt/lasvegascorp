@@ -1,33 +1,15 @@
 [
   {
-    "id": "not_empty_account",
-    "name": "Account must be filled",
+    "id": "rule_0743a0cc-9ee1-4042-abdc-8f69a11b7bb9",
+    "name": "Employee Must Exist",
     "type": "not_empty",
-    "column": "Account"
-  },
-  {
-    "id": "amount_range",
-    "name": "Amount must be between 0 and 100000",
-    "type": "number_range",
-    "column": "Amount",
-    "min": 0,
-    "max": 100000
-  },
-  {
-    "id": "type_allowed",
-    "name": "Type must be one of A, B, C",
-    "type": "allowed_values",
-    "column": "Type",
-    "allowed": ["A", "B", "C"]
-  },
-  {
-    "id": "conditional_zyz_b_required",
-    "name": "If A is ZYZ then B is required",
-    "type": "conditional_required",
-    "column": "B",
-    "when_column": "A",
-    "when_operator": "equals",
-    "when_equals": "ZYZ",
-    "then_column": "B"
+    "column": "Employee",
+    "min": null,
+    "max": null,
+    "allowed": null,
+    "when_column": null,
+    "when_operator": null,
+    "when_equals": null,
+    "then_column": null
   }
 ]

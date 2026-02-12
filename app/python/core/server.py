@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -156,14 +157,28 @@ def rule_failures(df: pd.DataFrame, rule: Rule) -> List[Dict[str, Any]]:
 
 
 @app.post("/validate", response_model=ValidationResponse)
-def validate_file(file: UploadFile = File(...), rule_ids: Optional[str] = None, categories: Optional[str] = None):
-    if file.filename is None or not file.filename.lower().endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="Only .xlsx files are supported")
+def validate_file(
+    file: UploadFile = File(...),
+    rule_ids: Optional[str] = Form(default=None),
+    categories: Optional[str] = Form(default=None),
+    discipline_filter: Optional[str] = Form(default=None),
+    check_for_completion: Optional[str] = Form(default=None),
+):
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="File name is required")
+
+    filename = file.filename.lower()
+    if not (filename.endswith(".xlsx") or filename.endswith(".xls") or filename.endswith(".csv")):
+        raise HTTPException(status_code=400, detail="Only .xlsx, .xls, or .csv files are supported")
 
     try:
-        df = pd.read_excel(file.file)
+        if filename.endswith(".csv"):
+            df = pd.read_csv(file.file)
+        else:
+            df = pd.read_excel(file.file)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"Failed to read input file: {exc}") from exc
+    df.columns = [str(col).strip() for col in df.columns]
 
     all_rules = load_rules()
     selected_rules = all_rules
@@ -184,6 +199,9 @@ def validate_file(file: UploadFile = File(...), rule_ids: Optional[str] = None, 
             selected_categories = [str(item) for item in json.loads(categories)]
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="Invalid categories payload") from exc
+
+    discipline_enabled = str(discipline_filter or "").lower() in {"true", "1", "yes"}
+    completion_check_enabled = str(check_for_completion or "").lower() in {"true", "1", "yes"}
 
     failures_rows_union = set()
     rule_summaries: List[RuleSummary] = []
@@ -231,15 +249,51 @@ def validate_file(file: UploadFile = File(...), rule_ids: Optional[str] = None, 
     failures_df = pd.DataFrame(failures_output)
 
     with pd.ExcelWriter(report_path, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, sheet_name="Summary", index=False)
-        rule_summary_df.to_excel(writer, sheet_name="RuleSummary", index=False)
-        failures_df.to_excel(writer, sheet_name="Failures", index=False)
+        df.to_excel(writer, sheet_name="Original", index=False)
         if selected_categories and "Discipline" in df.columns:
             discipline_series = df["Discipline"].astype(str).str.strip()
+            normalized_categories = {str(category).strip().casefold(): str(category).strip() for category in selected_categories}
             for category in selected_categories:
-                sheet_rows = df[discipline_series == str(category)]
-                safe_name = str(category)[:31] or "Category"
+                category_key = str(category).strip().casefold()
+                sheet_rows = df[discipline_series.str.casefold() == category_key]
+                safe_name = normalized_categories.get(category_key, str(category))[:31] or "Category"
                 sheet_rows.to_excel(writer, sheet_name=safe_name, index=False)
+        if discipline_enabled and {"Task", "Employee"}.issubset(df.columns):
+            def build_summary(codes: List[str], sheet_name: str) -> None:
+                pattern = "|".join(re.escape(code) for code in codes)
+                task_series = df["Task"].astype(str)
+                match = task_series.str.contains(pattern, case=False, na=False)
+                subset = df[match].copy()
+                if subset.empty:
+                    pd.DataFrame(columns=["Employee", "Rate", "Millage", "Surcharge", "Amount"]).to_excel(
+                        writer, sheet_name=sheet_name[:31], index=False
+                    )
+                    return
+
+                numeric_map = {
+                    "Rate": ["Rate"],
+                    "Millage": ["Millage", "Mileage"],
+                    "Surcharge": ["Surcharge"],
+                    "Amount": ["Amount"],
+                }
+                for canonical, aliases in numeric_map.items():
+                    source_col = next((col for col in aliases if col in subset.columns), None)
+                    if source_col:
+                        subset[canonical] = pd.to_numeric(subset[source_col], errors="coerce").fillna(0)
+                    else:
+                        subset[canonical] = 0
+
+                summary = (
+                    subset.groupby("Employee", as_index=False)[["Rate", "Millage", "Surcharge", "Amount"]].sum()
+                )
+                summary.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+
+            build_summary(["RPT", "PTA", "ST", "T"], "Terapia")
+            build_summary(["RN"], "Enfermeria")
+        if completion_check_enabled and "Task Status" in df.columns:
+            status_series = df["Task Status"].astype(str).str.strip()
+            incomplete_rows = df[status_series.str.casefold() != "completed"]
+            incomplete_rows.to_excel(writer, sheet_name="Check for Completion", index=False)
 
     return ValidationResponse(summary=summary, rules=rule_summaries, report_id=report_id)
 
