@@ -15,6 +15,7 @@ Planned stack:
 - Download artifacts:
   - `windows-installers` for `.exe` installer
   - `linux-installers` for `AppImage`/`deb`
+  - `macos-installers` for `.dmg`/`.zip`
 
 ### Local packaging prerequisites
 - Python 3.11+

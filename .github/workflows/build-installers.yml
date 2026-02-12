@@ -18,6 +18,9 @@ jobs:
           - os: ubuntu-latest
             electron_script: dist:linux
             artifact_name: linux-installers
+          - os: macos-latest
+            electron_script: dist:mac
+            artifact_name: macos-installers
 
     runs-on: ${{ matrix.os }}
 

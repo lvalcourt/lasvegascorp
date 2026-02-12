@@ -1,7 +1,13 @@
 {
   "name": "lasvegarscorp-electron",
   "version": "0.1.0",
+  "description": "Las Vegas Corp Payroll Tool desktop app",
   "private": true,
+  "homepage": "https://example.com/lasvegarscorp",
+  "author": {
+    "name": "Las Vegas Corp",
+    "email": "lvalcourt@autonomypr.com"
+  },
   "main": "dist/main.js",
   "type": "module",
   "scripts": {
@@ -12,6 +18,7 @@
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win nsis",
     "dist:linux": "npm run build && electron-builder --linux AppImage deb",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip",
     "typecheck": "vue-tsc --noEmit"
   },
   "devDependencies": {
@@ -62,7 +69,15 @@
         "AppImage",
         "deb"
       ],
-      "category": "Office"
+      "category": "Office",
+      "maintainer": "Las Vegas Corp <lvalcourt@autonomypr.com>"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.business"
     }
   }
 }
