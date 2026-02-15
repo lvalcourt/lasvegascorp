@@ -3,7 +3,7 @@
     <section class="space-y-6">
       <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Payroll Tool</h2>
+          <h2 class="text-lg font-semibold">Employee Classifier Tool</h2>
           <button
             class="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-slate-500"
             @click="resetEditor"
@@ -183,6 +183,24 @@
           <div class="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
             <div class="text-slate-500">Rules</div>
             <div class="text-lg font-semibold">{{ validationSummary.total_rules }}</div>
+          </div>
+        </div>
+        <div v-if="validationSummary" class="mt-3 grid gap-3 sm:grid-cols-4 text-xs text-slate-300">
+          <div class="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+            <div class="text-slate-500">Employees</div>
+            <div class="text-lg font-semibold">{{ validationSummary.total_employees }}</div>
+          </div>
+          <div class="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+            <div class="text-slate-500">Terapia Employees</div>
+            <div class="text-lg font-semibold">{{ validationSummary.terapia_employees }}</div>
+          </div>
+          <div class="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+            <div class="text-slate-500">Enfermeria Employees</div>
+            <div class="text-lg font-semibold">{{ validationSummary.enfermeria_employees }}</div>
+          </div>
+          <div class="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+            <div class="text-slate-500">Unclassified Employees</div>
+            <div class="text-lg font-semibold text-amber-300">{{ validationSummary.unclassified_employees }}</div>
           </div>
         </div>
 

@@ -1,7 +1,7 @@
 {
   "name": "lasvegarscorp-electron",
   "version": "0.1.0",
-  "description": "Las Vegas Corp Payroll Tool desktop app",
+  "description": "Las Vegas Corp Employee Classifier Tool desktop app",
   "private": true,
   "homepage": "https://example.com/lasvegarscorp",
   "author": {
@@ -37,7 +37,7 @@
   },
   "build": {
     "appId": "com.lasvegarscorp.payrolltool",
-    "productName": "Las Vegas Corp Payroll Tool",
+    "productName": "Las Vegas Corp Employee Classifier Tool",
     "directories": {
       "output": "release"
     },
