@@ -144,6 +144,16 @@
       <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <h2 class="text-lg font-semibold">Report Sheets</h2>
         <p class="mt-1 text-xs text-slate-400">Select optional report filters.</p>
+        <div class="mt-4 text-sm">
+          <label class="text-xs text-slate-400">Mileage Cost Multiplier</label>
+          <input
+            v-model.number="mileageCost"
+            type="number"
+            step="0.01"
+            min="0"
+            class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2"
+          />
+        </div>
         <div class="mt-4 border-t border-slate-800 pt-4 text-sm">
           <label class="flex items-center gap-3">
             <input v-model="disciplineFilter" type="checkbox" />
@@ -271,6 +281,7 @@ const loadingRules = ref(true);
 const rulesMessage = ref("");
 const disciplineFilter = ref(false);
 const checkForCompletion = ref(false);
+const mileageCost = ref(1);
 
 const editor = reactive<Rule>({
   id: "",
@@ -415,6 +426,7 @@ const validateFile = async () => {
   payload.append("rule_ids", JSON.stringify(selectedRuleIds.value));
   payload.append("discipline_filter", String(disciplineFilter.value));
   payload.append("check_for_completion", String(checkForCompletion.value));
+  payload.append("mileage_cost", String(mileageCost.value));
 
   try {
     const response = await fetch(`${API_BASE}/validate`, { method: "POST", body: payload });

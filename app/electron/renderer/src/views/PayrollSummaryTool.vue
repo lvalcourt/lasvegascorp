@@ -22,6 +22,16 @@
             {{ processing ? "Processing..." : "Process File" }}
           </button>
         </div>
+        <div class="mt-4 text-left text-sm">
+          <label class="text-xs text-slate-400">Mileage Cost Multiplier</label>
+          <input
+            v-model.number="mileageCost"
+            type="number"
+            step="0.01"
+            min="0"
+            class="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2"
+          />
+        </div>
       </div>
     </section>
 
@@ -89,6 +99,7 @@ const processing = ref(false);
 const reportId = ref("");
 const error = ref("");
 const summary = ref<any>(null);
+const mileageCost = ref(1);
 
 const onFilePick = (event: Event) => {
   const input = event.target as HTMLInputElement;
@@ -111,6 +122,7 @@ const processFile = async () => {
 
   const payload = new FormData();
   payload.append("file", selectedFile.value);
+  payload.append("mileage_cost", String(mileageCost.value));
 
   try {
     const response = await fetch(`${API_BASE}/process-payroll-summary`, {
