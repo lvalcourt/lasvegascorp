@@ -1,0 +1,66 @@
+<svg width="640" height="300" viewBox="0 0 640 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="40" y1="24" x2="600" y2="276" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="108" y1="72" x2="244" y2="214" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="wordmark" x1="274" y1="104" x2="562" y2="222" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E2E8F0"/>
+      <stop offset="0.55" stop-color="#7DD3FC"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <filter id="glow" x="54" y="31" width="250" height="250" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="12" y="12" width="616" height="276" rx="36" fill="url(#bg)"/>
+  <rect x="12.5" y="12.5" width="615" height="275" rx="35.5" stroke="#1E293B"/>
+
+  <g opacity="0.14">
+    <path d="M44 220H596" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M44 176H596" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M44 132H596" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M44 88H596" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M108 36V264" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M172 36V264" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M236 36V264" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M300 36V264" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M364 36V264" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M428 36V264" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M492 36V264" stroke="#38BDF8" stroke-dasharray="5 7"/>
+    <path d="M556 36V264" stroke="#38BDF8" stroke-dasharray="5 7"/>
+  </g>
+
+  <g opacity="0.14">
+    <text x="430" y="156" fill="#94A3B8" font-family="Arial, sans-serif" font-size="88" font-weight="700" letter-spacing="10">PR</text>
+  </g>
+
+  <g filter="url(#glow)">
+    <circle cx="176" cy="150" r="78" stroke="url(#ring)" stroke-width="3.5"/>
+    <circle cx="176" cy="150" r="52" stroke="#67E8F9" stroke-opacity="0.72" stroke-width="2"/>
+    <circle cx="176" cy="150" r="24" stroke="#BAE6FD" stroke-opacity="0.9" stroke-width="1.5"/>
+    <path d="M176 72V228" stroke="#38BDF8" stroke-opacity="0.65" stroke-width="1.5"/>
+    <path d="M98 150H254" stroke="#38BDF8" stroke-opacity="0.65" stroke-width="1.5"/>
+    <path d="M176 150L226 110" stroke="#67E8F9" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="226" cy="110" r="7" fill="#67E8F9"/>
+    <circle cx="176" cy="150" r="8" fill="#F8FAFC"/>
+  </g>
+
+  <g>
+    <text x="288" y="132" fill="url(#wordmark)" font-family="Arial, sans-serif" font-size="42" font-weight="700" letter-spacing="4">TRAKINPR</text>
+    <text x="290" y="164" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="3.2">ACCOUNTABILITY . FAST TRACKING . AUTOMATED FINANCIAL DEPLOYMENT</text>
+    <path d="M290 184H544" stroke="#22D3EE" stroke-opacity="0.45"/>
+    <path d="M290 203C323 187 355 182 384 182C427 182 471 194 541 225" stroke="#A78BFA" stroke-opacity="0.68" stroke-width="2.4" stroke-linecap="round"/>
+    <circle cx="382" cy="182" r="3.5" fill="#67E8F9"/>
+    <circle cx="541" cy="225" r="4.5" fill="#C084FC"/>
+  </g>
+</svg>

@@ -1,0 +1,37 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="panel" x1="24" y1="20" x2="228" y2="236" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="74" y1="60" x2="180" y2="178" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="10" y="10" width="236" height="236" rx="42" fill="url(#panel)"/>
+  <rect x="10.5" y="10.5" width="235" height="235" rx="41.5" stroke="#1E293B"/>
+
+  <g opacity="0.16">
+    <path d="M34 78H222" stroke="#38BDF8" stroke-dasharray="4 6"/>
+    <path d="M34 128H222" stroke="#38BDF8" stroke-dasharray="4 6"/>
+    <path d="M34 178H222" stroke="#38BDF8" stroke-dasharray="4 6"/>
+    <path d="M78 34V222" stroke="#38BDF8" stroke-dasharray="4 6"/>
+    <path d="M128 34V222" stroke="#38BDF8" stroke-dasharray="4 6"/>
+    <path d="M178 34V222" stroke="#38BDF8" stroke-dasharray="4 6"/>
+  </g>
+
+  <text x="156" y="86" fill="#94A3B8" fill-opacity="0.18" font-family="Arial, sans-serif" font-size="34" font-weight="700" letter-spacing="4">PR</text>
+
+  <circle cx="110" cy="120" r="56" stroke="url(#accent)" stroke-width="3"/>
+  <circle cx="110" cy="120" r="36" stroke="#67E8F9" stroke-opacity="0.75" stroke-width="2"/>
+  <circle cx="110" cy="120" r="17" stroke="#E0F2FE" stroke-opacity="0.85" stroke-width="1.4"/>
+  <path d="M110 64V176" stroke="#38BDF8" stroke-opacity="0.6" stroke-width="1.4"/>
+  <path d="M54 120H166" stroke="#38BDF8" stroke-opacity="0.6" stroke-width="1.4"/>
+  <path d="M110 120L146 92" stroke="#67E8F9" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="146" cy="92" r="6" fill="#67E8F9"/>
+  <circle cx="110" cy="120" r="7" fill="#F8FAFC"/>
+
+  <text x="38" y="215" fill="#E2E8F0" font-family="Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="3">TRAKINPR</text>
+</svg>

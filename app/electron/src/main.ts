@@ -1,10 +1,11 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
 import { spawn, type ChildProcess } from "child_process";
 import fs from "fs";
 import path from "path";
 
 let mainWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess | null = null;
+const authSessionPath = () => path.join(app.getPath("userData"), "auth-session.bin");
 
 function resolveBackendExecutable(): string | null {
   if (!app.isPackaged) {
@@ -67,7 +68,45 @@ function createWindow() {
   }
 }
 
+function writeAuthSession(payload: string) {
+  const target = authSessionPath();
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const contents = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(payload) : Buffer.from(payload, "utf-8");
+  fs.writeFileSync(target, contents);
+}
+
+function readAuthSession() {
+  const target = authSessionPath();
+  if (!fs.existsSync(target)) {
+    return null;
+  }
+  const raw = fs.readFileSync(target);
+  if (!raw.length) {
+    return null;
+  }
+  if (safeStorage.isEncryptionAvailable()) {
+    return safeStorage.decryptString(raw);
+  }
+  return raw.toString("utf-8");
+}
+
+function clearAuthSession() {
+  const target = authSessionPath();
+  if (fs.existsSync(target)) {
+    fs.unlinkSync(target);
+  }
+}
+
 app.whenReady().then(() => {
+  ipcMain.handle("auth:get-session", () => readAuthSession());
+  ipcMain.handle("auth:set-session", (_event, payload: string) => {
+    writeAuthSession(payload);
+    return true;
+  });
+  ipcMain.handle("auth:clear-session", () => {
+    clearAuthSession();
+    return true;
+  });
   startBackend();
   createWindow();
 });

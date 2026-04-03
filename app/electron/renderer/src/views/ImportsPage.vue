@@ -62,31 +62,42 @@
         <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
           <div class="flex items-center justify-between">
             <h2 class="text-lg font-semibold">Import History</h2>
-            <button class="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500" @click="loadImports">
-              Refresh
-            </button>
+            <div class="flex gap-2">
+              <button class="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500" @click="exportImportsCsv">
+                Export CSV
+              </button>
+              <button class="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500" @click="loadImports">
+                Refresh
+              </button>
+            </div>
           </div>
           <div class="mt-4 overflow-x-auto">
             <table class="min-w-full text-left text-xs">
               <thead class="text-slate-400">
                 <tr>
-                  <th class="pb-2 pr-4">File</th>
-                  <th class="pb-2 pr-4">Rows</th>
-                  <th class="pb-2 pr-4">Status</th>
-                  <th class="pb-2">Uploaded</th>
+                  <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleSort('filename')">File</button></th>
+                  <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleSort('tool_type')">Type</button></th>
+                  <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleSort('row_count')">Rows</button></th>
+                  <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleSort('status')">Status</button></th>
+                  <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleSort('uploaded_at')">Uploaded</button></th>
+                  <th class="pb-2">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 <tr
-                  v-for="item in imports"
+                  v-for="item in sortedImports"
                   :key="item.id"
                   class="cursor-pointer border-t border-slate-800 text-slate-200 hover:bg-slate-800/40"
                   @click="selectImport(item.id)"
                 >
                   <td class="py-2 pr-4">{{ item.filename }}</td>
+                  <td class="py-2 pr-4">{{ item.tool_type }}</td>
                   <td class="py-2 pr-4">{{ item.row_count }}</td>
                   <td class="py-2 pr-4">{{ item.status }}</td>
-                  <td class="py-2">{{ formatDate(item.uploaded_at) }}</td>
+                  <td class="py-2 pr-4">{{ formatDate(item.uploaded_at) }}</td>
+                  <td class="py-2">
+                    <button class="text-cyan-300 hover:text-cyan-100" @click.stop="openImportFile(item)">Open</button>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -116,15 +127,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import { authHeaders, authState } from "../auth";
+import { downloadCsv } from "../csv";
 import { useMileagePreference } from "../preferences";
+import { loadStoredState, saveStoredState } from "../storage";
+import { sortRows, type SortDirection } from "../table";
 
 const API_BASE = "http://127.0.0.1:8000";
+const STORAGE_KEY = "trakinpr-imports-page";
 
 const selectedFile = ref<File | null>(null);
-const importType = ref<"generic" | "payroll_summary">("generic");
+const pageState = loadStoredState(STORAGE_KEY, {
+  importType: "generic" as "generic" | "payroll_summary",
+  sortKey: "uploaded_at",
+  sortDirection: "desc" as SortDirection,
+});
+const importType = ref<"generic" | "payroll_summary">(pageState.importType);
 const mileagePreference = useMileagePreference();
 const uploading = ref(false);
 const clearing = ref(false);
@@ -135,6 +155,10 @@ const clearMessage = ref("");
 const imports = ref<any[]>([]);
 const importStats = ref<any>(null);
 const isAdmin = computed(() => authState.role === "admin");
+const sortKey = ref(pageState.sortKey);
+const sortDirection = ref<SortDirection>(pageState.sortDirection);
+
+const sortedImports = computed(() => sortRows(imports.value, sortKey.value, sortDirection.value));
 
 const onPickFile = (event: Event) => {
   const input = event.target as HTMLInputElement;
@@ -214,6 +238,35 @@ const selectImport = async (importId: string) => {
   if (!response.ok) return;
   importStats.value = await response.json();
 };
+
+const openImportFile = (item: any) => {
+  window.open(`${API_BASE}/documents/${item.tool_type}/${item.id}/download`, "_blank", "noopener,noreferrer");
+};
+
+const exportImportsCsv = () => {
+  downloadCsv(
+    "trakinpr-import-history.csv",
+    ["File", "Type", "Rows", "Status", "Uploaded"],
+    sortedImports.value.map((item) => [item.filename, item.tool_type, item.row_count, item.status, item.uploaded_at]),
+  );
+};
+
+const toggleSort = (key: string) => {
+  if (sortKey.value === key) {
+    sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
+    return;
+  }
+  sortKey.value = key;
+  sortDirection.value = "asc";
+};
+
+watch([importType, sortKey, sortDirection], () => {
+  saveStoredState(STORAGE_KEY, {
+    importType: importType.value,
+    sortKey: sortKey.value,
+    sortDirection: sortDirection.value,
+  });
+});
 
 const formatDate = (isoDate: string) => {
   try {

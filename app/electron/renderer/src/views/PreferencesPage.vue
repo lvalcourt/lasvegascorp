@@ -35,6 +35,44 @@
             </label>
           </div>
         </div>
+
+        <div class="mt-6 rounded-3xl border border-slate-800 bg-slate-950/75 p-5">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <label class="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Password & Security</label>
+              <p class="mt-3 text-sm leading-6 text-slate-400">
+                Use a stronger password with at least 8 characters, one uppercase letter, one lowercase letter, and one number.
+              </p>
+            </div>
+            <div v-if="authState.mustChangePassword" class="rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200">
+              Password update required
+            </div>
+          </div>
+
+          <form class="mt-5 grid gap-4 lg:grid-cols-3" @submit.prevent="submitPasswordChange">
+            <input
+              v-model="currentPassword"
+              type="password"
+              placeholder="Current password"
+              class="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-400"
+            />
+            <input
+              v-model="newPassword"
+              type="password"
+              placeholder="New password"
+              class="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-400"
+            />
+            <button type="submit" class="rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300">
+              Update Password
+            </button>
+          </form>
+          <div v-if="passwordMessage" class="mt-4 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
+            {{ passwordMessage }}
+          </div>
+          <div v-if="passwordError" class="mt-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+            {{ passwordError }}
+          </div>
+        </div>
       </div>
 
       <div class="space-y-6">
@@ -73,16 +111,33 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
-import { authState } from "../auth";
+import { authState, changePassword } from "../auth";
 import { preferencesState, setDashboardIncludeHistory, useMileagePreference } from "../preferences";
 
 const mileagePreference = useMileagePreference();
+const currentPassword = ref("");
+const newPassword = ref("");
+const passwordMessage = ref("");
+const passwordError = ref("");
 const dashboardIncludeHistory = computed({
   get: () => preferencesState.dashboardIncludeHistory,
   set: (value: boolean) => {
     setDashboardIncludeHistory(value);
   },
 });
+
+const submitPasswordChange = async () => {
+  passwordMessage.value = "";
+  passwordError.value = "";
+  try {
+    await changePassword(currentPassword.value, newPassword.value);
+    currentPassword.value = "";
+    newPassword.value = "";
+    passwordMessage.value = "Password updated successfully.";
+  } catch (error) {
+    passwordError.value = error instanceof Error ? error.message : "Unable to update password.";
+  }
+};
 </script>

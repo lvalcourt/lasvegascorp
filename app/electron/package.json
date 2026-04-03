@@ -1,11 +1,11 @@
 {
   "name": "lasvegarscorp-electron",
   "version": "0.1.0",
-  "description": "Las Vegas Corp Employee Classifier Tool desktop app",
+  "description": "TrakinPR operations and compliance desktop app",
   "private": true,
   "homepage": "https://example.com/lasvegarscorp",
   "author": {
-    "name": "Las Vegas Corp",
+    "name": "TrakinPR",
     "email": "lvalcourt@autonomypr.com"
   },
   "main": "dist/main.cjs",
@@ -38,8 +38,8 @@
     "vue-tsc": "^2.0.29"
   },
   "build": {
-    "appId": "com.lasvegarscorp.payrolltool",
-    "productName": "Las Vegas Corp Employee Classifier Tool",
+    "appId": "com.trakinpr.operationshub",
+    "productName": "TrakinPR Operations Hub",
     "directories": {
       "output": "release"
     },
@@ -72,7 +72,7 @@
         "deb"
       ],
       "category": "Office",
-      "maintainer": "Las Vegas Corp <lvalcourt@autonomypr.com>"
+      "maintainer": "TrakinPR <lvalcourt@autonomypr.com>"
     },
     "mac": {
       "target": [

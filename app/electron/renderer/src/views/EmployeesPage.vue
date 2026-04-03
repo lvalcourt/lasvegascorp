@@ -14,6 +14,9 @@
           <button class="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-200 hover:border-slate-500" @click="loadEmployees">
             Search
           </button>
+          <button class="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-200 hover:border-slate-500" @click="exportEmployeesCsv">
+            Export CSV
+          </button>
         </div>
         <div class="mt-3">
           <label class="text-xs text-slate-400">Mileage Multiplier</label>
@@ -30,18 +33,18 @@
           <table class="min-w-full text-left text-xs">
             <thead class="text-slate-400">
               <tr>
-                <th class="pb-2 pr-4">Name</th>
-                <th class="pb-2 pr-4">Rows</th>
-                <th class="pb-2 pr-4">Rate</th>
-                <th class="pb-2 pr-4">Mileage</th>
+                <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleEmployeesSort('name')">Name</button></th>
+                <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleEmployeesSort('rows_count')">Rows</button></th>
+                <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleEmployeesSort('rate_total')">Rate</button></th>
+                <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleEmployeesSort('mileage_total')">Mileage</button></th>
                 <th class="pb-2 pr-4">Mileage x Multiplier</th>
-                <th class="pb-2 pr-4">Surcharge</th>
-                <th class="pb-2">Amount</th>
+                <th class="pb-2 pr-4"><button class="hover:text-white" @click="toggleEmployeesSort('surcharge_total')">Surcharge</button></th>
+                <th class="pb-2"><button class="hover:text-white" @click="toggleEmployeesSort('amount_total')">Amount</button></th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="employee in employees"
+                v-for="employee in sortedEmployees"
                 :key="employee.id"
                 class="cursor-pointer border-t border-slate-800 text-slate-200 hover:bg-slate-800/40"
                 @click="selectEmployee(employee.id)"
@@ -73,9 +76,18 @@
       <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <div class="flex items-start justify-between">
           <h2 class="text-lg font-semibold">Employee Entries</h2>
-          <div v-if="selectedEmployee && sourceSummary" class="text-right text-[11px] text-slate-400">
-            <div><span class="text-slate-500">File:</span> {{ sourceSummary.filename }}</div>
-            <div><span class="text-slate-500">Loaded:</span> {{ sourceSummary.loaded_at }}</div>
+          <div class="flex items-start gap-3">
+            <button
+              v-if="entries.length"
+              class="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500"
+              @click="exportEntriesCsv"
+            >
+              Export CSV
+            </button>
+            <div v-if="selectedEmployee && sourceSummary" class="text-right text-[11px] text-slate-400">
+              <div><span class="text-slate-500">File:</span> {{ sourceSummary.filename }}</div>
+              <div><span class="text-slate-500">Loaded:</span> {{ sourceSummary.loaded_at }}</div>
+            </div>
           </div>
         </div>
         <p v-if="!selectedEmployee" class="mt-3 text-xs text-slate-400">Select an employee to view rows.</p>
@@ -86,19 +98,19 @@
             <table class="min-w-full text-left text-xs">
               <thead class="text-slate-400">
                 <tr>
-                  <th class="pb-2 pr-3">Date</th>
-                  <th class="pb-2 pr-3">Patient Name</th>
-                  <th class="pb-2 pr-3">Task</th>
-                  <th class="pb-2 pr-3">Class</th>
-                  <th class="pb-2 pr-3">Rate</th>
-                  <th class="pb-2 pr-3">Mileage</th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleEntriesSort('entry_date')">Date</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleEntriesSort('patient_name')">Patient Name</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleEntriesSort('task')">Task</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleEntriesSort('classification')">Class</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleEntriesSort('rate')">Rate</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleEntriesSort('mileage')">Mileage</button></th>
                   <th class="pb-2 pr-3">Mileage x Multiplier</th>
-                  <th class="pb-2 pr-3">Surcharge</th>
-                  <th class="pb-2">Amount</th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleEntriesSort('surcharge')">Surcharge</button></th>
+                  <th class="pb-2"><button class="hover:text-white" @click="toggleEntriesSort('amount')">Amount</button></th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="entry in entries" :key="entry.id" class="border-t border-slate-800 text-slate-200">
+                <tr v-for="entry in sortedEntries" :key="entry.id" class="border-t border-slate-800 text-slate-200">
                   <td class="py-2 pr-3">{{ entry.entry_date || "" }}</td>
                   <td class="py-2 pr-3">{{ entry.patient_name || "" }}</td>
                   <td class="py-2 pr-3">{{ entry.task }}</td>
@@ -134,15 +146,30 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 
+import { downloadCsv } from "../csv";
 import { useMileagePreference } from "../preferences";
+import { loadStoredState, saveStoredState } from "../storage";
+import { sortRows, type SortDirection } from "../table";
 
 const API_BASE = "http://127.0.0.1:8000";
+const STORAGE_KEY = "trakinpr-employees-page";
+const pageState = loadStoredState(STORAGE_KEY, {
+  search: "",
+  employeesSortKey: "name",
+  employeesSortDirection: "asc" as SortDirection,
+  entriesSortKey: "entry_date",
+  entriesSortDirection: "desc" as SortDirection,
+});
 
-const search = ref("");
+const search = ref(pageState.search);
 const mileagePreference = useMileagePreference();
 const employees = ref<any[]>([]);
 const selectedEmployee = ref<any>(null);
 const entries = ref<any[]>([]);
+const employeesSortKey = ref(pageState.employeesSortKey);
+const employeesSortDirection = ref<SortDirection>(pageState.employeesSortDirection);
+const entriesSortKey = ref(pageState.entriesSortKey);
+const entriesSortDirection = ref<SortDirection>(pageState.entriesSortDirection);
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
 const loadEmployees = async () => {
@@ -157,6 +184,9 @@ const selectEmployee = async (employeeId: number) => {
   selectedEmployee.value = data.employee;
   entries.value = data.entries;
 };
+
+const sortedEmployees = computed(() => sortRows(employees.value, employeesSortKey.value, employeesSortDirection.value));
+const sortedEntries = computed(() => sortRows(entries.value, entriesSortKey.value, entriesSortDirection.value));
 
 const formatNum = (value: number) => Number(value || 0).toFixed(2);
 const adjustMileage = (value: number) => Number(value || 0) * Number(mileagePreference.value || 0);
@@ -203,11 +233,76 @@ const sourceSummary = computed(() => {
   };
 });
 
+const toggleEmployeesSort = (key: string) => {
+  if (employeesSortKey.value === key) {
+    employeesSortDirection.value = employeesSortDirection.value === "asc" ? "desc" : "asc";
+    return;
+  }
+  employeesSortKey.value = key;
+  employeesSortDirection.value = "asc";
+};
+
+const toggleEntriesSort = (key: string) => {
+  if (entriesSortKey.value === key) {
+    entriesSortDirection.value = entriesSortDirection.value === "asc" ? "desc" : "asc";
+    return;
+  }
+  entriesSortKey.value = key;
+  entriesSortDirection.value = "asc";
+};
+
+const exportEmployeesCsv = () => {
+  downloadCsv(
+    "trakinpr-employees.csv",
+    ["Name", "Rows", "Rate", "Mileage", "Mileage x Multiplier", "Surcharge", "Amount"],
+    sortedEmployees.value.map((employee) => [
+      employee.name,
+      employee.rows_count,
+      formatNum(employee.rate_total),
+      formatNum(employee.mileage_total),
+      formatNum(adjustMileage(employee.mileage_total)),
+      formatNum(employee.surcharge_total),
+      formatNum(employee.amount_total),
+    ]),
+  );
+};
+
+const exportEntriesCsv = () => {
+  if (!selectedEmployee.value) return;
+  downloadCsv(
+    `trakinpr-employee-${selectedEmployee.value.name.replace(/\s+/g, "-").toLowerCase()}.csv`,
+    ["Date", "Patient Name", "Task", "Class", "Rate", "Mileage", "Mileage x Multiplier", "Surcharge", "Amount", "File", "Loaded"],
+    sortedEntries.value.map((entry) => [
+      entry.entry_date || "",
+      entry.patient_name || "",
+      entry.task || "",
+      entry.classification || "",
+      formatNum(entry.rate),
+      formatNum(entry.mileage),
+      formatNum(adjustMileage(entry.mileage)),
+      formatNum(entry.surcharge),
+      formatNum(entry.amount),
+      entry.filename || "",
+      entry.uploaded_at || "",
+    ]),
+  );
+};
+
 watch(search, () => {
   if (searchDebounce) clearTimeout(searchDebounce);
   searchDebounce = setTimeout(() => {
     loadEmployees();
   }, 250);
+});
+
+watch([search, employeesSortKey, employeesSortDirection, entriesSortKey, entriesSortDirection], () => {
+  saveStoredState(STORAGE_KEY, {
+    search: search.value,
+    employeesSortKey: employeesSortKey.value,
+    employeesSortDirection: employeesSortDirection.value,
+    entriesSortKey: entriesSortKey.value,
+    entriesSortDirection: entriesSortDirection.value,
+  });
 });
 
 onMounted(async () => {

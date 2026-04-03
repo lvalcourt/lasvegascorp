@@ -12,6 +12,12 @@ import PreferencesPage from "./views/PreferencesPage.vue";
 import PaymentsPage from "./views/PaymentsPage.vue";
 import Form480PrepPage from "./views/Form480PrepPage.vue";
 import PaymentProfilesPage from "./views/PaymentProfilesPage.vue";
+import DocumentsPage from "./views/DocumentsPage.vue";
+import TransactionsPage from "./views/TransactionsPage.vue";
+import VendorsPage from "./views/VendorsPage.vue";
+import BillsExpensesPage from "./views/BillsExpensesPage.vue";
+import CategoriesPage from "./views/CategoriesPage.vue";
+import UsersPage from "./views/UsersPage.vue";
 
 type RouteMeta = {
   public?: boolean;
@@ -24,7 +30,13 @@ const routes = [
   { path: "/login", name: "login", component: LoginPage, meta: { public: true } as RouteMeta },
   { path: "/", name: "landing", component: LandingPage, meta: { requiresAuth: true, section: "overview" } as RouteMeta },
   { path: "/preferences", name: "preferences", component: PreferencesPage, meta: { requiresAuth: true, section: "preferences" } as RouteMeta },
+  { path: "/users", name: "users", component: UsersPage, meta: { requiresAuth: true, section: "preferences", roles: ["admin"] } as RouteMeta },
   { path: "/tools", name: "tools", component: ToolsPage, meta: { requiresAuth: true, section: "tools", roles: ["admin", "operator"] } as RouteMeta },
+  { path: "/documents", name: "documents", component: DocumentsPage, meta: { requiresAuth: true, section: "operations" } as RouteMeta },
+  { path: "/transactions", name: "transactions", component: TransactionsPage, meta: { requiresAuth: true, section: "operations" } as RouteMeta },
+  { path: "/bills-expenses", name: "bills-expenses", component: BillsExpensesPage, meta: { requiresAuth: true, section: "operations", roles: ["admin", "operator"] } as RouteMeta },
+  { path: "/vendors", name: "vendors", component: VendorsPage, meta: { requiresAuth: true, section: "operations" } as RouteMeta },
+  { path: "/categories", name: "categories", component: CategoriesPage, meta: { requiresAuth: true, section: "workspace", roles: ["admin", "operator"] } as RouteMeta },
   { path: "/imports", name: "imports", component: ImportsPage, meta: { requiresAuth: true, section: "workspace", roles: ["admin", "operator"] } as RouteMeta },
   { path: "/employees", name: "employees", component: EmployeesPage, meta: { requiresAuth: true, section: "workspace" } as RouteMeta },
   { path: "/records", name: "records", component: RecordsPage, meta: { requiresAuth: true, section: "workspace" } as RouteMeta },
@@ -52,6 +64,10 @@ router.beforeEach((to) => {
 
   if (to.meta.requiresAuth && !authState.loggedIn) {
     return { name: "login" };
+  }
+
+  if (authState.loggedIn && authState.mustChangePassword && to.name !== "preferences") {
+    return { name: "preferences" };
   }
 
   if (!hasRoleAccess(to.meta.roles as UserRole[] | undefined)) {

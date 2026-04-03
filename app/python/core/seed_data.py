@@ -17,6 +17,9 @@ def seed_demo_data(db_path: Path, replace_existing: bool = False) -> Dict[str, A
 
     with connect(db_path) as conn:
         if replace_existing:
+            conn.execute("DELETE FROM business_transactions")
+            conn.execute("DELETE FROM business_categories")
+            conn.execute("DELETE FROM expense_documents")
             conn.execute("DELETE FROM payment_records")
             conn.execute("DELETE FROM payment_imports")
             conn.execute("DELETE FROM payer_profiles")
@@ -26,10 +29,37 @@ def seed_demo_data(db_path: Path, replace_existing: bool = False) -> Dict[str, A
             conn.execute("DELETE FROM imports")
             conn.execute("DELETE FROM employees")
 
+        category_seed = [
+            ("Professional Services", "expense", "Service providers and contractors", "emerald", 1),
+            ("Clinical Supplies", "expense", "Operational supplies and care materials", "amber", 0),
+            ("Travel & Mileage", "expense", "Mileage and travel-related costs", "cyan", 0),
+            ("Software & Subscriptions", "expense", "Software tools and subscriptions", "violet", 0),
+        ]
+        for name, kind, description, color_token, is_default in category_seed:
+            existing = conn.execute("SELECT id FROM business_categories WHERE name = ?", (name,)).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE business_categories
+                    SET kind = ?, description = ?, color_token = ?, is_default = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (kind, description, color_token, is_default, created_at, existing["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO business_categories
+                    (name, kind, description, color_token, is_default, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (name, kind, description, color_token, is_default, created_at, created_at),
+                )
+
         companies = [
             {
-                "name": "Las Vegas Corp",
-                "legal_name": "Las Vegas Corporation LLC",
+                "name": "TrakinPR",
+                "legal_name": "TrakinPR LLC",
                 "tax_id": "66-1234567",
                 "address_line1": "100 Calle Principal",
                 "address_line2": "Suite 300",
@@ -108,8 +138,8 @@ def seed_demo_data(db_path: Path, replace_existing: bool = False) -> Dict[str, A
         conn.execute("UPDATE payer_profiles SET is_default = 0")
         payer_profiles = [
             {
-                "company_name": "Las Vegas Corp",
-                "name": "Las Vegas Corp - Main Filing",
+                "company_name": "TrakinPR",
+                "name": "TrakinPR - Main Filing",
                 "tax_id": "66-1234567",
                 "address_line1": "100 Calle Principal",
                 "address_line2": "Suite 300",
@@ -315,7 +345,7 @@ def seed_demo_data(db_path: Path, replace_existing: bool = False) -> Dict[str, A
                     "reference_number": reference_number,
                 }
             )
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO payment_records
                 (payment_import_id, payee_id, payment_date, amount, category, document_type, reference_number, tax_year, notes, source_row_json, is_active, created_at)
@@ -336,7 +366,112 @@ def seed_demo_data(db_path: Path, replace_existing: bool = False) -> Dict[str, A
                     created_at,
                 ),
             )
+            conn.execute(
+                """
+                INSERT INTO business_transactions
+                (source_type, source_id, payee_id, company_id, transaction_type, status, transaction_date, due_date, amount, category, reference_number, document_type, notes, tax_year, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "payment_record",
+                    str(cursor.lastrowid),
+                    payee_ids[payee_name],
+                    None,
+                    "payment",
+                    "posted",
+                    payment_date,
+                    None,
+                    amount,
+                    category,
+                    reference_number,
+                    document_type,
+                    notes,
+                    tax_year,
+                    is_active,
+                    created_at,
+                    created_at,
+                ),
+            )
             payment_count += 1
+
+        seeded_transaction_ids: Dict[str, int] = {}
+        business_transactions = [
+            ("manual", uuid.uuid4().hex, payee_ids["Caribe Consulting Group PSC"], company_ids["TrakinPR"], "bill", "open", f"{current_year}-07-01", f"{current_year}-07-15", 1450.0, "Office Systems", "BILL-7001", "Invoice", "Quarterly software and consulting bill", current_year, 1),
+            ("manual", uuid.uuid4().hex, payee_ids["Ana Rivera Therapy Services"], company_ids["TrakinPR"], "expense", "posted", f"{current_year}-07-03", None, 220.0, "Supplies", "EXP-8100", "Receipt", "Clinical supplies purchase", current_year, 1),
+        ]
+        for source_type, source_id, payee_id, company_id, transaction_type, status, transaction_date, due_date, amount, category, reference_number, document_type, notes, tax_year, is_active in business_transactions:
+            cursor = conn.execute(
+                """
+                INSERT INTO business_transactions
+                (source_type, source_id, payee_id, company_id, transaction_type, status, transaction_date, due_date, amount, category, reference_number, document_type, notes, tax_year, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_type,
+                    source_id,
+                    payee_id,
+                    company_id,
+                    transaction_type,
+                    status,
+                    transaction_date,
+                    due_date,
+                    amount,
+                    category,
+                    reference_number,
+                    document_type,
+                    notes,
+                    tax_year,
+                    is_active,
+                    created_at,
+                    created_at,
+                ),
+            )
+            seeded_transaction_ids[reference_number] = int(cursor.lastrowid)
+
+        expense_documents = [
+            (
+                "demo-expense-doc-1",
+                "office_subscription_receipt.pdf",
+                "demo-expense-hash-1",
+                "classified",
+                "Software & Subscriptions",
+                payee_ids["Caribe Consulting Group PSC"],
+                company_ids["TrakinPR"],
+                seeded_transaction_ids.get("BILL-7001"),
+                "Linked demo receipt for subscription billing.",
+            ),
+            (
+                "demo-expense-doc-2",
+                "clinical_supply_receipt.jpg",
+                "demo-expense-hash-2",
+                "reviewed",
+                "Clinical Supplies",
+                payee_ids["Ana Rivera Therapy Services"],
+                company_ids["TrakinPR"],
+                None,
+                "Waiting for amount confirmation before creating expense.",
+            ),
+        ]
+        for document_id, filename, source_hash, status, suggested_category, payee_id, company_id, linked_transaction_id, notes in expense_documents:
+            existing = conn.execute("SELECT id FROM expense_documents WHERE id = ?", (document_id,)).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE expense_documents
+                    SET filename = ?, source_hash = ?, uploaded_at = ?, status = ?, linked_transaction_id = ?, suggested_category = ?, payee_id = ?, company_id = ?, notes = ?
+                    WHERE id = ?
+                    """,
+                    (filename, source_hash, created_at, status, linked_transaction_id, suggested_category, payee_id, company_id, notes, document_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO expense_documents
+                    (id, filename, source_hash, uploaded_at, status, linked_transaction_id, suggested_category, payee_id, company_id, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (document_id, filename, source_hash, created_at, status, linked_transaction_id, suggested_category, payee_id, company_id, notes),
+                )
 
         import_id = "demo-employee-import"
         exists = conn.execute("SELECT id FROM imports WHERE id = ?", (import_id,)).fetchone()

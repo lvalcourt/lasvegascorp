@@ -92,30 +92,36 @@
           <div class="mt-3 flex gap-2">
             <button class="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-slate-900 hover:bg-indigo-400" @click="loadRecords">Apply Filters</button>
             <button class="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-200 hover:border-slate-500" @click="resetFilters">Reset</button>
+            <button class="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-200 hover:border-slate-500" @click="exportPaymentRecordsCsv">Export CSV</button>
           </div>
         </div>
 
         <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
           <div class="flex items-center justify-between">
             <h3 class="text-lg font-semibold text-white">Payment Imports</h3>
-            <button class="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500" @click="loadPaymentImports">Refresh</button>
+            <div class="flex gap-2">
+              <button class="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500" @click="exportPaymentImportsCsv">Export CSV</button>
+              <button class="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500" @click="loadPaymentImports">Refresh</button>
+            </div>
           </div>
           <div class="mt-4 overflow-x-auto">
             <table class="min-w-full text-left text-xs">
               <thead class="text-slate-400">
                 <tr>
-                  <th class="pb-2 pr-3">File</th>
-                  <th class="pb-2 pr-3">Status</th>
-                  <th class="pb-2 pr-3">Rows</th>
-                  <th class="pb-2">Uploaded</th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleImportsSort('filename')">File</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleImportsSort('status')">Status</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleImportsSort('row_count')">Rows</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleImportsSort('uploaded_at')">Uploaded</button></th>
+                  <th class="pb-2">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="item in paymentImports" :key="item.id" class="border-t border-slate-800 text-slate-200">
+                <tr v-for="item in sortedPaymentImports" :key="item.id" class="border-t border-slate-800 text-slate-200">
                   <td class="py-2 pr-3">{{ item.filename }}</td>
                   <td class="py-2 pr-3">{{ item.status }}</td>
                   <td class="py-2 pr-3">{{ item.row_count }}</td>
-                  <td class="py-2">{{ formatDate(item.uploaded_at) }}</td>
+                  <td class="py-2 pr-3">{{ formatDate(item.uploaded_at) }}</td>
+                  <td class="py-2"><button class="text-cyan-300 hover:text-cyan-100" @click="openPaymentImportFile(item)">Open</button></td>
                 </tr>
               </tbody>
             </table>
@@ -133,17 +139,17 @@
             <table class="min-w-full text-left text-xs">
               <thead class="text-slate-400">
                 <tr>
-                  <th class="pb-2 pr-3">Payee</th>
-                  <th class="pb-2 pr-3">Date</th>
-                  <th class="pb-2 pr-3">Amount</th>
-                  <th class="pb-2 pr-3">Category</th>
-                  <th class="pb-2 pr-3">Tax ID</th>
-                  <th class="pb-2 pr-3">Reference</th>
-                  <th class="pb-2">File</th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleRecordsSort('payee_name')">Payee</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleRecordsSort('payment_date')">Date</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleRecordsSort('amount')">Amount</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleRecordsSort('category')">Category</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleRecordsSort('tax_id')">Tax ID</button></th>
+                  <th class="pb-2 pr-3"><button class="hover:text-white" @click="toggleRecordsSort('reference_number')">Reference</button></th>
+                  <th class="pb-2"><button class="hover:text-white" @click="toggleRecordsSort('filename')">File</button></th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in paymentRows" :key="row.id" class="border-t border-slate-800 text-slate-200">
+                <tr v-for="row in sortedPaymentRows" :key="row.id" class="border-t border-slate-800 text-slate-200">
                   <td class="py-2 pr-3">{{ row.payee_name }}</td>
                   <td class="py-2 pr-3">{{ row.payment_date || "" }}</td>
                   <td class="py-2 pr-3">{{ currency(row.amount) }}</td>
@@ -162,11 +168,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { authHeaders, authState } from "../auth";
+import { downloadCsv } from "../csv";
+import { loadStoredState, saveStoredState } from "../storage";
+import { sortRows, type SortDirection } from "../table";
 
 const API_BASE = "http://127.0.0.1:8000";
+const STORAGE_KEY = "trakinpr-payments-page";
+const pageState = loadStoredState(STORAGE_KEY, {
+  search: "",
+  tax_year: new Date().getFullYear(),
+  include_history: false,
+  importsSortKey: "uploaded_at",
+  importsSortDirection: "desc" as SortDirection,
+  recordsSortKey: "payment_date",
+  recordsSortDirection: "desc" as SortDirection,
+});
 
 const canManagePayments = computed(() => authState.role === "admin" || authState.role === "operator");
 const selectedFile = ref<File | null>(null);
@@ -176,12 +195,18 @@ const uploadMessage = ref("");
 const uploadError = ref("");
 const paymentImports = ref<any[]>([]);
 const paymentRows = ref<any[]>([]);
+const importsSortKey = ref(pageState.importsSortKey);
+const importsSortDirection = ref<SortDirection>(pageState.importsSortDirection);
+const recordsSortKey = ref(pageState.recordsSortKey);
+const recordsSortDirection = ref<SortDirection>(pageState.recordsSortDirection);
 
 const filters = reactive({
-  search: "",
-  tax_year: new Date().getFullYear(),
-  include_history: false,
+  search: pageState.search,
+  tax_year: pageState.tax_year,
+  include_history: pageState.include_history,
 });
+const sortedPaymentImports = computed(() => sortRows(paymentImports.value, importsSortKey.value, importsSortDirection.value));
+const sortedPaymentRows = computed(() => sortRows(paymentRows.value, recordsSortKey.value, recordsSortDirection.value));
 
 const manualForm = reactive({
   payee_name: "",
@@ -298,6 +323,72 @@ const formatDate = (value: string) => {
     return value;
   }
 };
+
+const exportPaymentImportsCsv = () => {
+  downloadCsv(
+    "trakinpr-payment-imports.csv",
+    ["File", "Status", "Rows", "Uploaded"],
+    sortedPaymentImports.value.map((item) => [item.filename, item.status, item.row_count, item.uploaded_at]),
+  );
+};
+
+const exportPaymentRecordsCsv = () => {
+  downloadCsv(
+    "trakinpr-payment-records.csv",
+    ["Payee", "Date", "Amount", "Category", "Tax ID", "Reference", "File"],
+    sortedPaymentRows.value.map((row) => [
+      row.payee_name || "",
+      row.payment_date || "",
+      Number(row.amount || 0).toFixed(2),
+      row.category || "",
+      row.tax_id || "",
+      row.reference_number || "",
+      row.filename || "Manual Entry",
+    ]),
+  );
+};
+
+const toggleImportsSort = (key: string) => {
+  if (importsSortKey.value === key) {
+    importsSortDirection.value = importsSortDirection.value === "asc" ? "desc" : "asc";
+    return;
+  }
+  importsSortKey.value = key;
+  importsSortDirection.value = "asc";
+};
+
+const toggleRecordsSort = (key: string) => {
+  if (recordsSortKey.value === key) {
+    recordsSortDirection.value = recordsSortDirection.value === "asc" ? "desc" : "asc";
+    return;
+  }
+  recordsSortKey.value = key;
+  recordsSortDirection.value = "asc";
+};
+
+const openPaymentImportFile = (item: any) => {
+  window.open(`${API_BASE}/documents/payment/${item.id}/download`, "_blank", "noopener,noreferrer");
+};
+
+watch(filters, () => {
+  saveStoredState(STORAGE_KEY, {
+    ...filters,
+    importsSortKey: importsSortKey.value,
+    importsSortDirection: importsSortDirection.value,
+    recordsSortKey: recordsSortKey.value,
+    recordsSortDirection: recordsSortDirection.value,
+  });
+}, { deep: true });
+
+watch([importsSortKey, importsSortDirection, recordsSortKey, recordsSortDirection], () => {
+  saveStoredState(STORAGE_KEY, {
+    ...filters,
+    importsSortKey: importsSortKey.value,
+    importsSortDirection: importsSortDirection.value,
+    recordsSortKey: recordsSortKey.value,
+    recordsSortDirection: recordsSortDirection.value,
+  });
+});
 
 onMounted(async () => {
   await Promise.all([loadPaymentImports(), loadRecords()]);
