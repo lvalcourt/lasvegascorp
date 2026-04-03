@@ -11,12 +11,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from pypdf import PdfReader, PdfWriter
 from pydantic import BaseModel, Field
+from reportlab.pdfbase import pdfdoc
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
 from core.db import connect, init_db
+from core.seed_data import seed_demo_data
+
+
+def _compat_md5(*args, **kwargs):
+    kwargs.pop("usedforsecurity", None)
+    return hashlib.md5(*args, **kwargs)
+
+
+pdfdoc.md5 = _compat_md5
 
 app = FastAPI()
 
@@ -33,7 +46,11 @@ DATA_DIR = Path(os.getenv("LASVEGASCORP_DATA_DIR", str(ROOT_DIR)))
 DEFAULT_RULES_PATH = Path(os.getenv("LASVEGASCORP_DEFAULT_RULES_PATH", str(ROOT_DIR / "rules.json")))
 RULES_PATH = DATA_DIR / "rules.json"
 REPORTS_DIR = DATA_DIR / "reports"
+PAYMENT_DOCUMENTS_DIR = DATA_DIR / "payment_documents"
 DB_PATH = DATA_DIR / "app.db"
+ROLE_ORDER = {"viewer": 1, "operator": 2, "admin": 3}
+REPO_ROOT = ROOT_DIR.parent.parent
+FORM_4806SP_TEMPLATE = REPO_ROOT / "reference" / "480.6sp_2024_informativo.pdf"
 
 
 class Rule(BaseModel):
@@ -87,6 +104,375 @@ class ClearDataResponse(BaseModel):
     deleted_employees: int
 
 
+class DemoSeedResponse(BaseModel):
+    companies_created: int
+    payers_created: int
+    payees_created: int
+    payment_records_created: int
+    employee_rows_created: int
+    current_tax_year: int
+    recommended_payee_for_pdf: str
+
+
+class PaymentImportResponse(BaseModel):
+    payment_import_id: str
+    filename: str
+    status: str
+    records_created: int
+    payees_identified: int
+    notes: Optional[str] = None
+
+
+class PaymentRecordCreate(BaseModel):
+    payee_name: str
+    payment_date: Optional[str] = None
+    amount: float = 0
+    category: Optional[str] = None
+    document_type: Optional[str] = None
+    reference_number: Optional[str] = None
+    tax_id: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class PayerProfilePayload(BaseModel):
+    company_id: Optional[int] = None
+    name: str
+    tax_id: Optional[str] = None
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    is_default: bool = False
+
+
+class CompanyProfilePayload(BaseModel):
+    name: str
+    legal_name: Optional[str] = None
+    tax_id: Optional[str] = None
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    is_default: bool = False
+
+
+class PayeeProfilePayload(BaseModel):
+    name: str
+    tax_id: Optional[str] = None
+    payee_type: str = "contractor"
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+def build_4806sp_payee_rows(year_value: int, include_history: bool) -> Dict[str, Any]:
+    history_clause = "" if include_history else "AND pr.is_active = 1"
+    with connect(DB_PATH) as conn:
+        totals = conn.execute(
+            f"""
+            SELECT
+              COUNT(*) AS records_count,
+              COUNT(DISTINCT pr.payee_id) AS payees_count,
+              SUM(pr.amount) AS amount_total
+            FROM payment_records pr
+            WHERE COALESCE(pr.tax_year, ?) = ?
+              {history_clause}
+            """,
+            (year_value, year_value),
+        ).fetchone()
+
+        payees = conn.execute(
+            f"""
+            SELECT
+              p.id AS payee_id,
+              p.name AS payee_name,
+              p.tax_id,
+              p.payee_type,
+              COUNT(*) AS payments_count,
+              SUM(pr.amount) AS amount_total,
+              MIN(pr.payment_date) AS first_payment_date,
+              MAX(pr.payment_date) AS last_payment_date,
+              MAX(COALESCE(NULLIF(TRIM(pr.category), ''), '')) AS category_sample,
+              CASE WHEN COALESCE(TRIM(p.tax_id), '') = '' THEN 1 ELSE 0 END AS missing_tax_id,
+              CASE WHEN SUM(pr.amount) <= 0 THEN 1 ELSE 0 END AS non_positive_total
+            FROM payment_records pr
+            JOIN payees p ON p.id = pr.payee_id
+            WHERE COALESCE(pr.tax_year, ?) = ?
+              {history_clause}
+            GROUP BY p.id, p.name, p.tax_id, p.payee_type
+            ORDER BY amount_total DESC, p.name ASC
+            """,
+            (year_value, year_value),
+        ).fetchall()
+
+    payee_rows = []
+    missing_tax_id_count = 0
+    ready_count = 0
+    for row in payees:
+        issues = []
+        if row["missing_tax_id"]:
+            issues.append("Missing tax ID")
+            missing_tax_id_count += 1
+        if row["non_positive_total"]:
+            issues.append("No positive payment total")
+        if not row["first_payment_date"]:
+            issues.append("Missing payment date")
+        ready = len(issues) == 0
+        if ready:
+            ready_count += 1
+        payee_rows.append(
+            {
+                "payee_id": row["payee_id"],
+                "payee_name": row["payee_name"],
+                "tax_id": row["tax_id"],
+                "payee_type": row["payee_type"],
+                "payments_count": row["payments_count"] or 0,
+                "amount_total": row["amount_total"] or 0,
+                "first_payment_date": row["first_payment_date"],
+                "last_payment_date": row["last_payment_date"],
+                "category_sample": row["category_sample"] or "",
+                "missing_tax_id": bool(row["missing_tax_id"]),
+                "ready": ready,
+                "issues": issues,
+            }
+        )
+
+    return {
+        "tax_year": year_value,
+        "totals": {
+            "records_count": totals["records_count"] or 0,
+            "payees_count": totals["payees_count"] or 0,
+            "amount_total": totals["amount_total"] or 0,
+            "payees_missing_tax_id": missing_tax_id_count,
+            "payees_ready": ready_count,
+        },
+        "payees": payee_rows,
+    }
+
+
+def get_default_payer_profile() -> Dict[str, Any]:
+    with connect(DB_PATH) as conn:
+        row = conn.execute(
+            """
+            SELECT id, company_id, name, tax_id, address_line1, address_line2, city, state, zip_code, email, phone
+            FROM payer_profiles
+            WHERE is_default = 1
+            ORDER BY id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+    if row is None:
+        company = get_default_company_profile()
+        return {
+            "id": None,
+            "company_id": company.get("id"),
+            "name": company.get("name", "Las Vegas Corp"),
+            "tax_id": company.get("tax_id", ""),
+            "address_line1": company.get("address_line1", ""),
+            "address_line2": company.get("address_line2", ""),
+            "city": company.get("city", ""),
+            "state": company.get("state", "PR"),
+            "zip_code": company.get("zip_code", ""),
+            "email": company.get("email", ""),
+            "phone": company.get("phone", ""),
+        }
+    return dict(row)
+
+
+def get_default_company_profile() -> Dict[str, Any]:
+    with connect(DB_PATH) as conn:
+        row = conn.execute(
+            """
+            SELECT id, name, legal_name, tax_id, address_line1, address_line2, city, state, zip_code, email, phone, is_default
+            FROM company_profiles
+            WHERE is_default = 1
+            ORDER BY id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+    if row is None:
+        return {
+            "id": None,
+            "name": "Las Vegas Corp",
+            "legal_name": "Las Vegas Corp",
+            "tax_id": "",
+            "address_line1": "",
+            "address_line2": "",
+            "city": "",
+            "state": "PR",
+            "zip_code": "",
+            "email": "",
+            "phone": "",
+            "is_default": True,
+        }
+    return dict(row)
+
+
+def upsert_payee_profile(conn, payload: Dict[str, Any], now: str) -> int:
+    payee_name = (payload.get("name") or "").strip()
+    if not payee_name:
+        raise HTTPException(status_code=400, detail="Payee name is required")
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO payees
+        (name, tax_id, payee_type, address_line1, address_line2, city, state, zip_code, email, phone, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payee_name,
+            payload.get("tax_id"),
+            payload.get("payee_type") or "contractor",
+            payload.get("address_line1"),
+            payload.get("address_line2"),
+            payload.get("city"),
+            payload.get("state"),
+            payload.get("zip_code"),
+            payload.get("email"),
+            payload.get("phone"),
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE payees
+        SET
+          tax_id = COALESCE(NULLIF(?, ''), tax_id),
+          payee_type = COALESCE(NULLIF(?, ''), payee_type),
+          address_line1 = COALESCE(NULLIF(?, ''), address_line1),
+          address_line2 = COALESCE(NULLIF(?, ''), address_line2),
+          city = COALESCE(NULLIF(?, ''), city),
+          state = COALESCE(NULLIF(?, ''), state),
+          zip_code = COALESCE(NULLIF(?, ''), zip_code),
+          email = COALESCE(NULLIF(?, ''), email),
+          phone = COALESCE(NULLIF(?, ''), phone)
+        WHERE name = ?
+        """,
+        (
+            payload.get("tax_id"),
+            payload.get("payee_type"),
+            payload.get("address_line1"),
+            payload.get("address_line2"),
+            payload.get("city"),
+            payload.get("state"),
+            payload.get("zip_code"),
+            payload.get("email"),
+            payload.get("phone"),
+            payee_name,
+        ),
+    )
+    row = conn.execute("SELECT id FROM payees WHERE name = ?", (payee_name,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=500, detail="Unable to save payee profile")
+    return int(row["id"])
+
+
+def generate_4806sp_draft_pdf(prefill: Dict[str, Any]) -> Path:
+    if not FORM_4806SP_TEMPLATE.exists():
+        raise HTTPException(status_code=500, detail="480.6SP template PDF not found in reference directory")
+
+    report_id = uuid.uuid4().hex
+    output_path = REPORTS_DIR / f"4806sp_draft_{report_id}.pdf"
+
+    template_reader = PdfReader(str(FORM_4806SP_TEMPLATE))
+    writer = PdfWriter()
+
+    packet = prefill["prefill_packet"]
+
+    overlay_buffer = io.BytesIO()
+    c = canvas.Canvas(overlay_buffer, pagesize=letter)
+    c.setFont("Helvetica", 10)
+
+    # Draft overlay for the official 480.6SP template.
+    c.drawString(505, 650, str(prefill["tax_year"]))
+    c.drawString(65, 724, packet.get("payer_tax_id", ""))
+    c.drawString(65, 706, packet.get("payer_name", ""))
+    c.drawString(65, 688, packet.get("payer_address_line1", ""))
+    payer_city_line = " ".join(part for part in [packet.get("payer_city", ""), packet.get("payer_state", ""), packet.get("payer_zip_code", "")] if part)
+    c.drawString(65, 670, payer_city_line)
+    c.drawString(65, 594, packet.get("recipient_tax_id", ""))
+    c.drawString(65, 575, packet.get("recipient_name", ""))
+    c.drawString(65, 557, packet.get("recipient_address_line1", ""))
+    recipient_city_line = " ".join(part for part in [packet.get("recipient_city", ""), packet.get("recipient_state", ""), packet.get("recipient_zip_code", "")] if part)
+    c.drawString(65, 539, recipient_city_line)
+    c.drawRightString(300, 435, f"{float(packet.get('services_total', 0) or 0):,.2f}")
+    c.drawString(65, 118, "DRAFT PREFILL - Verify all fields before filing in SURI")
+    c.save()
+    overlay_buffer.seek(0)
+
+    overlay_pdf = PdfReader(overlay_buffer)
+    first_page = template_reader.pages[0]
+    first_page.merge_page(overlay_pdf.pages[0])
+    writer.add_page(first_page)
+
+    for page in template_reader.pages[1:]:
+        writer.add_page(page)
+
+    summary_buffer = io.BytesIO()
+    c2 = canvas.Canvas(summary_buffer, pagesize=letter)
+    c2.setFont("Helvetica-Bold", 16)
+    c2.drawString(54, 744, "480.6SP Draft Prefill Summary")
+    c2.setFont("Helvetica", 10)
+    y = 712
+    lines = [
+        f"Tax year: {prefill['tax_year']}",
+        f"Recipient: {packet.get('recipient_name', '')}",
+        f"Recipient tax ID: {packet.get('recipient_tax_id', '')}",
+        f"Services total: {float(packet.get('services_total', 0) or 0):,.2f}",
+        f"Payments count: {packet.get('payments_count', 0)}",
+        f"First payment date: {packet.get('first_payment_date') or ''}",
+        f"Last payment date: {packet.get('last_payment_date') or ''}",
+        f"Categories: {', '.join(packet.get('service_categories', []))}",
+        "",
+        "Issues:",
+    ]
+    for issue in prefill["issues"] or ["No blocking issues found."]:
+        lines.append(f"- {issue}")
+    lines.extend(
+        [
+            "",
+            "Not yet mapped from app data:",
+            "- Withholding-specific boxes beyond total paid",
+            "",
+            "This file is a draft support export for review before final SURI preparation.",
+        ]
+    )
+    for line in lines:
+        c2.drawString(54, y, line)
+        y -= 16
+        if y < 72:
+            c2.showPage()
+            c2.setFont("Helvetica", 10)
+            y = 744
+    c2.save()
+    summary_buffer.seek(0)
+    summary_pdf = PdfReader(summary_buffer)
+    for page in summary_pdf.pages:
+        writer.add_page(page)
+
+    with output_path.open("wb") as fh:
+        writer.write(fh)
+    return output_path
+
+
+def require_role(user_role: str | None, minimum_role: str) -> str:
+    normalized = (user_role or "viewer").strip().lower()
+    if normalized not in ROLE_ORDER:
+        raise HTTPException(status_code=403, detail="Invalid user role")
+    if ROLE_ORDER[normalized] < ROLE_ORDER[minimum_role]:
+        raise HTTPException(status_code=403, detail=f"{minimum_role.title()} role required")
+    return normalized
+
+
 def ensure_rules_file() -> None:
     if not RULES_PATH.exists():
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -109,6 +495,8 @@ def save_rules(rules: List[Rule]) -> None:
 @app.on_event("startup")
 def startup() -> None:
     init_db(DB_PATH)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    PAYMENT_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @app.get("/health")
@@ -122,13 +510,15 @@ def get_rules():
 
 
 @app.post("/rules", response_model=List[Rule])
-def update_rules(rules: List[Rule]):
+def update_rules(rules: List[Rule], x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
     save_rules(rules)
     return rules
 
 
 @app.post("/imports", response_model=ImportResponse)
-def create_import(file: UploadFile = File(...)):
+def create_import(file: UploadFile = File(...), x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
     df, source_hash = read_uploaded_dataframe(file)
     df.columns = [str(col).strip() for col in df.columns]
 
@@ -581,7 +971,8 @@ def dashboard_metrics(include_history: bool = False):
 
 
 @app.post("/admin/clear-employee-data", response_model=ClearDataResponse)
-def clear_employee_data():
+def clear_employee_data(x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "admin")
     with connect(DB_PATH) as conn:
         deleted_entries = conn.execute("SELECT COUNT(*) AS n FROM work_entries").fetchone()["n"]
         deleted_imports = conn.execute("SELECT COUNT(*) AS n FROM imports").fetchone()["n"]
@@ -597,6 +988,717 @@ def clear_employee_data():
         deleted_entries=deleted_entries,
         deleted_employees=deleted_employees,
     )
+
+
+@app.post("/admin/seed-demo-data", response_model=DemoSeedResponse)
+def create_demo_seed_data(replace_existing: bool = True, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "admin")
+    data = seed_demo_data(DB_PATH, replace_existing=replace_existing)
+    return DemoSeedResponse(**data)
+
+
+@app.post("/payments/imports", response_model=PaymentImportResponse)
+def create_payment_import(file: UploadFile = File(...), x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="File name is required")
+
+    raw_bytes, source_hash = read_upload_bytes(file)
+    now = datetime.now(timezone.utc).isoformat()
+    payment_import_id = uuid.uuid4().hex
+    filename = file.filename
+    document_path = save_payment_document(payment_import_id, filename, raw_bytes)
+
+    df = try_read_tabular_bytes(filename, raw_bytes)
+    status = "needs_review"
+    notes = f"Document stored at {document_path}. Manual review needed."
+    payment_rows: List[Dict[str, Any]] = []
+    if df is not None:
+        payment_rows = create_payment_rows_from_dataframe(df)
+        status = "completed"
+        notes = f"Imported {len(payment_rows)} payment rows from spreadsheet."
+
+    with connect(DB_PATH) as conn:
+        existing = conn.execute(
+            "SELECT id FROM payment_imports WHERE source_hash = ? ORDER BY uploaded_at DESC LIMIT 1",
+            (source_hash,),
+        ).fetchone()
+        if existing:
+            payment_import_id = existing["id"]
+            conn.execute("DELETE FROM payment_records WHERE payment_import_id = ?", (payment_import_id,))
+            conn.execute(
+                "UPDATE payment_imports SET filename = ?, uploaded_at = ?, status = ?, row_count = ?, notes = ? WHERE id = ?",
+                (filename, now, status, len(payment_rows), notes, payment_import_id),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO payment_imports (id, filename, source_hash, uploaded_at, status, row_count, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (payment_import_id, filename, source_hash, now, status, len(payment_rows), notes),
+            )
+
+        payee_names = sorted({row["payee_name"] for row in payment_rows if row["payee_name"]})
+        for row in payment_rows:
+            upsert_payee_profile(
+                conn,
+                {
+                    "name": row["payee_name"],
+                    "tax_id": row.get("tax_id"),
+                    "payee_type": "contractor",
+                },
+                now,
+            )
+
+        rows_by_payee = {
+            row["name"]: row["id"]
+            for row in conn.execute(
+                "SELECT id, name FROM payees WHERE name IN ({})".format(",".join(["?"] * len(payee_names))),
+                payee_names,
+            ).fetchall()
+        } if payee_names else {}
+
+        payee_ids = list(rows_by_payee.values())
+        if payee_ids:
+            placeholders = ",".join(["?"] * len(payee_ids))
+            conn.execute(
+                f"""
+                UPDATE payment_records
+                SET is_active = 0
+                WHERE payee_id IN ({placeholders})
+                  AND payment_import_id <> ?
+                """,
+                (*payee_ids, payment_import_id),
+            )
+
+        for row in payment_rows:
+            payee_id = rows_by_payee.get(row["payee_name"])
+            if payee_id is None:
+                continue
+            conn.execute(
+                """
+                INSERT INTO payment_records
+                (payment_import_id, payee_id, payment_date, amount, category, document_type, reference_number, tax_year, notes, source_row_json, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payment_import_id,
+                    payee_id,
+                    row["payment_date"],
+                    row["amount"],
+                    row.get("category"),
+                    row.get("document_type"),
+                    row.get("reference_number"),
+                    row.get("tax_year"),
+                    row.get("notes"),
+                    row.get("source_row_json"),
+                    1,
+                    now,
+                ),
+            )
+        conn.commit()
+
+    return PaymentImportResponse(
+        payment_import_id=payment_import_id,
+        filename=filename,
+        status=status,
+        records_created=len(payment_rows),
+        payees_identified=len({row["payee_name"] for row in payment_rows if row["payee_name"]}),
+        notes=notes,
+    )
+
+
+@app.post("/payments/records")
+def create_payment_record(record: PaymentRecordCreate, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    payee_name = record.payee_name.strip()
+    if not payee_name:
+        raise HTTPException(status_code=400, detail="Payee name is required")
+
+    now = datetime.now(timezone.utc).isoformat()
+    normalized_date = normalize_date(record.payment_date) if record.payment_date else None
+    tax_year = int(normalized_date[:4]) if normalized_date else None
+
+    with connect(DB_PATH) as conn:
+        manual_import_id = f"manual-{uuid.uuid4().hex}"
+        conn.execute(
+            """
+            INSERT INTO payment_imports (id, filename, source_hash, uploaded_at, status, row_count, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (manual_import_id, "Manual Entry", None, now, "completed", 1, "Created from the Payments workspace form."),
+        )
+        upsert_payee_profile(
+            conn,
+            {
+                "name": payee_name,
+                "tax_id": record.tax_id,
+                "payee_type": "contractor",
+            },
+            now,
+        )
+        payee = conn.execute("SELECT id, name, tax_id FROM payees WHERE name = ?", (payee_name,)).fetchone()
+        if payee is None:
+            raise HTTPException(status_code=500, detail="Unable to create payee")
+
+        conn.execute(
+            """
+            INSERT INTO payment_records
+            (payment_import_id, payee_id, payment_date, amount, category, document_type, reference_number, tax_year, notes, source_row_json, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                manual_import_id,
+                payee["id"],
+                normalized_date,
+                float(record.amount or 0),
+                record.category,
+                record.document_type,
+                record.reference_number,
+                tax_year,
+                record.notes,
+                json.dumps(record.model_dump()),
+                1,
+                now,
+            ),
+        )
+        conn.commit()
+
+    return {"status": "created", "payee_name": payee_name}
+
+
+@app.get("/companies")
+def list_company_profiles():
+    with connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, legal_name, tax_id, address_line1, address_line2, city, state, zip_code, email, phone, is_default, created_at, updated_at
+            FROM company_profiles
+            ORDER BY is_default DESC, name ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/companies")
+def create_company_profile(company: CompanyProfilePayload, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    now = datetime.now(timezone.utc).isoformat()
+    with connect(DB_PATH) as conn:
+        if company.is_default:
+            conn.execute("UPDATE company_profiles SET is_default = 0")
+        cursor = conn.execute(
+            """
+            INSERT INTO company_profiles
+            (name, legal_name, tax_id, address_line1, address_line2, city, state, zip_code, email, phone, is_default, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                company.name,
+                company.legal_name,
+                company.tax_id,
+                company.address_line1,
+                company.address_line2,
+                company.city,
+                company.state,
+                company.zip_code,
+                company.email,
+                company.phone,
+                1 if company.is_default else 0,
+                now,
+                now,
+            ),
+        )
+        company_id = cursor.lastrowid
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id, name, legal_name, tax_id, address_line1, address_line2, city, state, zip_code, email, phone, is_default, created_at, updated_at
+            FROM company_profiles
+            WHERE id = ?
+            """,
+            (company_id,),
+        ).fetchone()
+    return dict(row) if row is not None else {}
+
+
+@app.put("/companies/{company_id}")
+def update_company_profile(company_id: int, company: CompanyProfilePayload, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    now = datetime.now(timezone.utc).isoformat()
+    with connect(DB_PATH) as conn:
+        if company.is_default:
+            conn.execute("UPDATE company_profiles SET is_default = 0")
+        conn.execute(
+            """
+            UPDATE company_profiles
+            SET name = ?, legal_name = ?, tax_id = ?, address_line1 = ?, address_line2 = ?, city = ?, state = ?, zip_code = ?, email = ?, phone = ?, is_default = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                company.name,
+                company.legal_name,
+                company.tax_id,
+                company.address_line1,
+                company.address_line2,
+                company.city,
+                company.state,
+                company.zip_code,
+                company.email,
+                company.phone,
+                1 if company.is_default else 0,
+                now,
+                company_id,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id, name, legal_name, tax_id, address_line1, address_line2, city, state, zip_code, email, phone, is_default, created_at, updated_at
+            FROM company_profiles
+            WHERE id = ?
+            """,
+            (company_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return dict(row)
+
+
+@app.delete("/companies/{company_id}")
+def delete_company_profile(company_id: int, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    with connect(DB_PATH) as conn:
+        conn.execute("UPDATE payer_profiles SET company_id = NULL WHERE company_id = ?", (company_id,))
+        cursor = conn.execute("DELETE FROM company_profiles WHERE id = ?", (company_id,))
+        conn.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return {"status": "deleted", "company_id": company_id}
+
+
+@app.get("/profiles/payers")
+def list_payer_profiles():
+    with connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT p.id, p.company_id, c.name AS company_name, p.name, p.tax_id, p.address_line1, p.address_line2, p.city, p.state, p.zip_code, p.email, p.phone, p.is_default, p.created_at, p.updated_at
+            FROM payer_profiles p
+            LEFT JOIN company_profiles c ON c.id = p.company_id
+            ORDER BY p.is_default DESC, p.name ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.get("/profiles/payer")
+def get_payer_profile():
+    return get_default_payer_profile()
+
+
+@app.post("/profiles/payer")
+def save_payer_profile(profile: PayerProfilePayload, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    now = datetime.now(timezone.utc).isoformat()
+    with connect(DB_PATH) as conn:
+        existing = conn.execute("SELECT id FROM payer_profiles ORDER BY id ASC LIMIT 1").fetchone()
+        conn.execute("UPDATE payer_profiles SET is_default = 0")
+        if existing:
+            conn.execute(
+                """
+                UPDATE payer_profiles
+                SET company_id = ?, name = ?, tax_id = ?, address_line1 = ?, address_line2 = ?, city = ?, state = ?, zip_code = ?, email = ?, phone = ?, is_default = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    profile.company_id,
+                    profile.name,
+                    profile.tax_id,
+                    profile.address_line1,
+                    profile.address_line2,
+                    profile.city,
+                    profile.state,
+                    profile.zip_code,
+                    profile.email,
+                    profile.phone,
+                    1,
+                    now,
+                    existing["id"],
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO payer_profiles
+                (company_id, name, tax_id, address_line1, address_line2, city, state, zip_code, email, phone, is_default, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    profile.company_id,
+                    profile.name,
+                    profile.tax_id,
+                    profile.address_line1,
+                    profile.address_line2,
+                    profile.city,
+                    profile.state,
+                    profile.zip_code,
+                    profile.email,
+                    profile.phone,
+                    now,
+                    now,
+                ),
+            )
+        conn.commit()
+    return get_default_payer_profile()
+
+
+@app.post("/profiles/payers")
+def create_payer_profile(profile: PayerProfilePayload, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    now = datetime.now(timezone.utc).isoformat()
+    with connect(DB_PATH) as conn:
+        existing_count = conn.execute("SELECT COUNT(*) AS n FROM payer_profiles").fetchone()["n"]
+        if profile.is_default:
+            conn.execute("UPDATE payer_profiles SET is_default = 0")
+        is_default = 1 if profile.is_default or existing_count == 0 else 0
+        cursor = conn.execute(
+            """
+            INSERT INTO payer_profiles
+            (company_id, name, tax_id, address_line1, address_line2, city, state, zip_code, email, phone, is_default, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                profile.company_id,
+                profile.name,
+                profile.tax_id,
+                profile.address_line1,
+                profile.address_line2,
+                profile.city,
+                profile.state,
+                profile.zip_code,
+                profile.email,
+                profile.phone,
+                is_default,
+                now,
+                now,
+            ),
+        )
+        payer_id = cursor.lastrowid
+        conn.commit()
+    return {"status": "created", "payer_id": payer_id}
+
+
+@app.put("/profiles/payers/{payer_id}")
+def update_payer_profile(payer_id: int, profile: PayerProfilePayload, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    now = datetime.now(timezone.utc).isoformat()
+    with connect(DB_PATH) as conn:
+        if profile.is_default:
+            conn.execute("UPDATE payer_profiles SET is_default = 0")
+        conn.execute(
+            """
+            UPDATE payer_profiles
+            SET company_id = ?, name = ?, tax_id = ?, address_line1 = ?, address_line2 = ?, city = ?, state = ?, zip_code = ?, email = ?, phone = ?, is_default = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                profile.company_id,
+                profile.name,
+                profile.tax_id,
+                profile.address_line1,
+                profile.address_line2,
+                profile.city,
+                profile.state,
+                profile.zip_code,
+                profile.email,
+                profile.phone,
+                1 if profile.is_default else 0,
+                now,
+                payer_id,
+            ),
+        )
+        conn.commit()
+    return {"status": "updated", "payer_id": payer_id}
+
+
+@app.delete("/profiles/payers/{payer_id}")
+def delete_payer_profile(payer_id: int, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    with connect(DB_PATH) as conn:
+        cursor = conn.execute("DELETE FROM payer_profiles WHERE id = ?", (payer_id,))
+        conn.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Payer profile not found")
+    return {"status": "deleted", "payer_id": payer_id}
+
+
+@app.get("/payments/payees")
+def list_payment_payees(search: str = "", limit: int = 200, offset: int = 0):
+    params: List[Any] = []
+    where = "1=1"
+    if search.strip():
+        where = "name LIKE ? OR COALESCE(tax_id, '') LIKE ?"
+        like = f"%{search.strip()}%"
+        params.extend([like, like])
+    with connect(DB_PATH) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, name, tax_id, payee_type, address_line1, address_line2, city, state, zip_code, email, phone, created_at
+            FROM payees
+            WHERE {where}
+            ORDER BY name ASC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/payments/payees")
+def save_payment_payee(payee: PayeeProfilePayload, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    now = datetime.now(timezone.utc).isoformat()
+    with connect(DB_PATH) as conn:
+        payee_id = upsert_payee_profile(conn, payee.model_dump(), now)
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id, name, tax_id, payee_type, address_line1, address_line2, city, state, zip_code, email, phone, created_at
+            FROM payees
+            WHERE id = ?
+            """,
+            (payee_id,),
+        ).fetchone()
+    return dict(row) if row is not None else {}
+
+
+@app.put("/payments/payees/{payee_id}")
+def update_payment_payee(payee_id: int, payee: PayeeProfilePayload, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    with connect(DB_PATH) as conn:
+        existing = conn.execute("SELECT id FROM payees WHERE id = ?", (payee_id,)).fetchone()
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Payee not found")
+        conn.execute(
+            """
+            UPDATE payees
+            SET name = ?, tax_id = ?, payee_type = ?, address_line1 = ?, address_line2 = ?, city = ?, state = ?, zip_code = ?, email = ?, phone = ?
+            WHERE id = ?
+            """,
+            (
+                payee.name,
+                payee.tax_id,
+                payee.payee_type,
+                payee.address_line1,
+                payee.address_line2,
+                payee.city,
+                payee.state,
+                payee.zip_code,
+                payee.email,
+                payee.phone,
+                payee_id,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id, name, tax_id, payee_type, address_line1, address_line2, city, state, zip_code, email, phone, created_at
+            FROM payees
+            WHERE id = ?
+            """,
+            (payee_id,),
+        ).fetchone()
+    return dict(row) if row is not None else {}
+
+
+@app.delete("/payments/payees/{payee_id}")
+def delete_payment_payee(payee_id: int, x_user_role: Optional[str] = Header(default=None)):
+    require_role(x_user_role, "operator")
+    with connect(DB_PATH) as conn:
+        count = conn.execute("SELECT COUNT(*) AS n FROM payment_records WHERE payee_id = ?", (payee_id,)).fetchone()["n"]
+        if count:
+            raise HTTPException(status_code=400, detail="Cannot delete payee with linked payment records")
+        cursor = conn.execute("DELETE FROM payees WHERE id = ?", (payee_id,))
+        conn.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Payee not found")
+    return {"status": "deleted", "payee_id": payee_id}
+
+
+@app.get("/payments/imports")
+def list_payment_imports(limit: int = 50, offset: int = 0):
+    with connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, filename, uploaded_at, status, row_count, notes
+            FROM payment_imports
+            ORDER BY uploaded_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.get("/payments/records")
+def list_payment_records(
+    search: str = "",
+    tax_year: Optional[int] = None,
+    include_history: bool = False,
+    limit: int = 300,
+    offset: int = 0,
+):
+    where = ["1=1"]
+    params: List[Any] = []
+    if search.strip():
+        like = f"%{search.strip()}%"
+        where.append("(p.name LIKE ? OR COALESCE(pr.category, '') LIKE ? OR COALESCE(pr.reference_number, '') LIKE ?)")
+        params.extend([like, like, like])
+    if tax_year is not None:
+        where.append("pr.tax_year = ?")
+        params.append(tax_year)
+    if not include_history:
+        where.append("pr.is_active = 1")
+
+    with connect(DB_PATH) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+              pr.id,
+              pr.payment_import_id,
+              pi.filename,
+              pi.uploaded_at,
+              p.name AS payee_name,
+              p.tax_id,
+              p.payee_type,
+              pr.payment_date,
+              pr.amount,
+              pr.category,
+              pr.document_type,
+              pr.reference_number,
+              pr.tax_year,
+              pr.notes,
+              pr.is_active
+            FROM payment_records pr
+            JOIN payees p ON p.id = pr.payee_id
+            LEFT JOIN payment_imports pi ON pi.id = pr.payment_import_id
+            WHERE {' AND '.join(where)}
+            ORDER BY COALESCE(pr.payment_date, '') DESC, p.name ASC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.get("/payments/summary")
+def payment_summary(tax_year: Optional[int] = None, include_history: bool = False):
+    return build_4806sp_payee_rows(tax_year or datetime.now().year, include_history)
+
+
+@app.get("/payments/4806sp/summary")
+def payment_4806sp_summary(tax_year: Optional[int] = None, include_history: bool = False):
+    return build_4806sp_payee_rows(tax_year or datetime.now().year, include_history)
+
+
+@app.get("/payments/4806sp/payees/{payee_id}/prefill")
+def payment_4806sp_prefill(payee_id: int, tax_year: Optional[int] = None, include_history: bool = False):
+    year_value = tax_year or datetime.now().year
+    history_clause = "" if include_history else "AND pr.is_active = 1"
+    payer_profile = get_default_payer_profile()
+    with connect(DB_PATH) as conn:
+        payee = conn.execute(
+            """
+            SELECT id, name, tax_id, payee_type, address_line1, address_line2, city, state, zip_code, email, phone
+            FROM payees
+            WHERE id = ?
+            """,
+            (payee_id,),
+        ).fetchone()
+        if payee is None:
+            raise HTTPException(status_code=404, detail="Payee not found")
+
+        totals = conn.execute(
+            f"""
+            SELECT
+              COUNT(*) AS payments_count,
+              SUM(pr.amount) AS amount_total,
+              MIN(pr.payment_date) AS first_payment_date,
+              MAX(pr.payment_date) AS last_payment_date,
+              GROUP_CONCAT(DISTINCT COALESCE(NULLIF(TRIM(pr.category), ''), '(uncategorized)')) AS categories
+            FROM payment_records pr
+            WHERE pr.payee_id = ?
+              AND COALESCE(pr.tax_year, ?) = ?
+              {history_clause}
+            """,
+            (payee_id, year_value, year_value),
+        ).fetchone()
+
+        rows = conn.execute(
+            f"""
+            SELECT payment_date, amount, category, document_type, reference_number, notes
+            FROM payment_records pr
+            WHERE pr.payee_id = ?
+              AND COALESCE(pr.tax_year, ?) = ?
+              {history_clause}
+            ORDER BY COALESCE(pr.payment_date, '') ASC
+            """,
+            (payee_id, year_value, year_value),
+        ).fetchall()
+
+    issues = []
+    if not payer_profile.get("tax_id"):
+        issues.append("Missing payer tax ID")
+    if not payee["tax_id"]:
+        issues.append("Missing payee tax ID")
+    if not payer_profile.get("address_line1") or not payer_profile.get("zip_code"):
+        issues.append("Missing payer address")
+    if not payee["address_line1"] or not payee["zip_code"]:
+        issues.append("Missing payee address")
+    if not totals["payments_count"]:
+        issues.append("No payments found for selected tax year")
+    if (totals["amount_total"] or 0) <= 0:
+        issues.append("Payment total is not positive")
+
+    return {
+        "form": "480.6SP",
+        "tax_year": year_value,
+        "autofill_ready": len(issues) == 0,
+        "issues": issues,
+        "prefill_packet": {
+            "payer_name": payer_profile.get("name", ""),
+            "payer_tax_id": payer_profile.get("tax_id", ""),
+            "payer_address_line1": payer_profile.get("address_line1", ""),
+            "payer_address_line2": payer_profile.get("address_line2", ""),
+            "payer_city": payer_profile.get("city", ""),
+            "payer_state": payer_profile.get("state", ""),
+            "payer_zip_code": payer_profile.get("zip_code", ""),
+            "recipient_name": payee["name"],
+            "recipient_tax_id": payee["tax_id"] or "",
+            "recipient_type": payee["payee_type"],
+            "recipient_address_line1": payee["address_line1"] or "",
+            "recipient_address_line2": payee["address_line2"] or "",
+            "recipient_city": payee["city"] or "",
+            "recipient_state": payee["state"] or "",
+            "recipient_zip_code": payee["zip_code"] or "",
+            "services_total": totals["amount_total"] or 0,
+            "payments_count": totals["payments_count"] or 0,
+            "first_payment_date": totals["first_payment_date"],
+            "last_payment_date": totals["last_payment_date"],
+            "service_categories": [] if not totals["categories"] else str(totals["categories"]).split(","),
+        },
+        "records": [dict(row) for row in rows],
+        "note": "This prefill packet is structured for future PDF field mapping. Exact PDF autofill depends on the official fillable 480.6SP field names.",
+    }
+
+
+@app.get("/payments/4806sp/payees/{payee_id}/draft-pdf")
+def payment_4806sp_draft_pdf(payee_id: int, tax_year: Optional[int] = None, include_history: bool = False):
+    prefill = payment_4806sp_prefill(payee_id, tax_year=tax_year, include_history=include_history)
+    pdf_path = generate_4806sp_draft_pdf(prefill)
+    filename = f"480.6SP_draft_{payee_id}_{prefill['tax_year']}.pdf"
+    return FileResponse(pdf_path, media_type="application/pdf", filename=filename)
 
 
 def rule_failures(df: pd.DataFrame, rule: Rule) -> List[Dict[str, Any]]:
@@ -694,6 +1796,28 @@ def read_uploaded_dataframe(file: UploadFile) -> tuple[pd.DataFrame, str]:
         raise HTTPException(status_code=400, detail=f"Failed to read input file: {exc}") from exc
 
 
+def read_upload_bytes(file: UploadFile) -> tuple[bytes, str]:
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="File name is required")
+    try:
+        raw_bytes = file.file.read()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}") from exc
+    return raw_bytes, hashlib.sha256(raw_bytes).hexdigest()
+
+
+def try_read_tabular_bytes(filename: str, raw_bytes: bytes) -> pd.DataFrame | None:
+    lower_name = filename.lower()
+    try:
+        if lower_name.endswith(".csv"):
+            return pd.read_csv(io.StringIO(raw_bytes.decode("utf-8-sig", errors="replace")))
+        if lower_name.endswith(".xlsx") or lower_name.endswith(".xls"):
+            return pd.read_excel(io.BytesIO(raw_bytes))
+    except Exception:
+        return None
+    return None
+
+
 def parse_number(value: Any) -> float:
     if pd.isna(value):
         return 0.0
@@ -749,6 +1873,75 @@ def normalize_date(value: Any) -> str | None:
     return parsed.date().isoformat()
 
 
+def save_payment_document(import_id: str, filename: str, raw_bytes: bytes) -> str:
+    PAYMENT_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", filename) or "payment_document"
+    stored_name = f"{import_id}_{safe_name}"
+    output_path = PAYMENT_DOCUMENTS_DIR / stored_name
+    output_path.write_bytes(raw_bytes)
+    return str(output_path)
+
+
+def create_payment_rows_from_dataframe(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    df = df.copy()
+    df.columns = [str(col).strip() for col in df.columns]
+
+    def find_column(options: List[str]) -> str | None:
+        lowered = {str(col).strip().casefold(): col for col in df.columns}
+        for option in options:
+            matched = lowered.get(option.casefold())
+            if matched is not None:
+                return matched
+        return None
+
+    payee_col = find_column(["Employee", "Payee", "Payee Name", "Vendor", "Name"])
+    amount_col = find_column(["Amount", "Payment Amount", "Total", "Net Amount"])
+    date_col = find_column(["Date", "Payment Date", "Paid Date", "Check Date"])
+    category_col = find_column(["Category", "Service Type", "Type"])
+    tax_id_col = find_column(["Tax ID", "TIN", "SSN", "EIN"])
+    ref_col = find_column(["Reference", "Reference Number", "Check Number", "Receipt Number"])
+    doc_type_col = find_column(["Document Type", "Payment Method", "Method"])
+    notes_col = find_column(["Notes", "Memo", "Description"])
+
+    if payee_col is None or amount_col is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Payment spreadsheet must contain payee and amount columns. Accepted payee headers include Employee, Payee, Vendor, or Name.",
+        )
+
+    rows: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        payee_name = "" if pd.isna(row.get(payee_col)) else str(row.get(payee_col)).strip()
+        if not payee_name:
+            continue
+        payment_date = normalize_date(row.get(date_col)) if date_col else None
+        amount = parse_number(row.get(amount_col))
+        if amount == 0 and not payment_date and not payee_name:
+            continue
+        tax_year = None
+        if payment_date:
+            try:
+                tax_year = int(payment_date[:4])
+            except ValueError:
+                tax_year = None
+        source_row = {key: (None if pd.isna(value) else str(value)) for key, value in row.to_dict().items()}
+        rows.append(
+            {
+                "payee_name": payee_name,
+                "payment_date": payment_date,
+                "amount": amount,
+                "category": None if category_col is None or pd.isna(row.get(category_col)) else str(row.get(category_col)).strip(),
+                "document_type": None if doc_type_col is None or pd.isna(row.get(doc_type_col)) else str(row.get(doc_type_col)).strip(),
+                "reference_number": None if ref_col is None or pd.isna(row.get(ref_col)) else str(row.get(ref_col)).strip(),
+                "tax_id": None if tax_id_col is None or pd.isna(row.get(tax_id_col)) else str(row.get(tax_id_col)).strip(),
+                "notes": None if notes_col is None or pd.isna(row.get(notes_col)) else str(row.get(notes_col)).strip(),
+                "tax_year": tax_year,
+                "source_row_json": json.dumps(source_row),
+            }
+        )
+    return rows
+
+
 @app.post("/validate", response_model=ValidationResponse)
 def validate_file(
     file: UploadFile = File(...),
@@ -757,7 +1950,9 @@ def validate_file(
     discipline_filter: Optional[str] = Form(default=None),
     check_for_completion: Optional[str] = Form(default=None),
     mileage_cost: Optional[str] = Form(default=None),
+    x_user_role: Optional[str] = Header(default=None),
 ):
+    require_role(x_user_role, "operator")
     df, _ = read_uploaded_dataframe(file)
     df.columns = [str(col).strip() for col in df.columns]
 
@@ -920,7 +2115,12 @@ def validate_file(
 
 
 @app.post("/process-payroll-summary", response_model=SummaryToolResponse)
-def process_payroll_summary(file: UploadFile = File(...), mileage_cost: Optional[str] = Form(default=None)):
+def process_payroll_summary(
+    file: UploadFile = File(...),
+    mileage_cost: Optional[str] = Form(default=None),
+    x_user_role: Optional[str] = Header(default=None),
+):
+    require_role(x_user_role, "operator")
     df, _ = read_uploaded_dataframe(file)
     df.columns = [str(col).strip() for col in df.columns]
 
@@ -1074,7 +2274,12 @@ def process_payroll_summary(file: UploadFile = File(...), mileage_cost: Optional
 
 
 @app.post("/imports/payroll-summary", response_model=ImportResponse)
-def create_payroll_summary_import(file: UploadFile = File(...), mileage_cost: Optional[str] = Form(default=None)):
+def create_payroll_summary_import(
+    file: UploadFile = File(...),
+    mileage_cost: Optional[str] = Form(default=None),
+    x_user_role: Optional[str] = Header(default=None),
+):
+    require_role(x_user_role, "operator")
     df, source_hash = read_uploaded_dataframe(file)
     df.columns = [str(col).strip() for col in df.columns]
     if df.shape[1] < 6:

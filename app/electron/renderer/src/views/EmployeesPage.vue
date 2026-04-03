@@ -18,7 +18,7 @@
         <div class="mt-3">
           <label class="text-xs text-slate-400">Mileage Multiplier</label>
           <input
-            v-model.number="mileageMultiplier"
+            v-model.number="mileagePreference"
             type="number"
             step="0.01"
             min="0"
@@ -134,10 +134,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 
+import { useMileagePreference } from "../preferences";
+
 const API_BASE = "http://127.0.0.1:8000";
 
 const search = ref("");
-const mileageMultiplier = ref(1);
+const mileagePreference = useMileagePreference();
 const employees = ref<any[]>([]);
 const selectedEmployee = ref<any>(null);
 const entries = ref<any[]>([]);
@@ -157,7 +159,7 @@ const selectEmployee = async (employeeId: number) => {
 };
 
 const formatNum = (value: number) => Number(value || 0).toFixed(2);
-const adjustMileage = (value: number) => Number(value || 0) * Number(mileageMultiplier.value || 0);
+const adjustMileage = (value: number) => Number(value || 0) * Number(mileagePreference.value || 0);
 
 const employeesTotals = computed(() => {
   return employees.value.reduce(

@@ -147,7 +147,7 @@
         <div class="mt-4 text-sm">
           <label class="text-xs text-slate-400">Mileage Cost Multiplier</label>
           <input
-            v-model.number="mileageCost"
+            v-model.number="mileagePreference"
             type="number"
             step="0.01"
             min="0"
@@ -248,6 +248,9 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 
+import { authHeaders } from "../auth";
+import { useMileagePreference } from "../preferences";
+
 type RuleType = "not_empty" | "number_range" | "allowed_values" | "conditional_required";
 
 interface Rule {
@@ -281,7 +284,7 @@ const loadingRules = ref(true);
 const rulesMessage = ref("");
 const disciplineFilter = ref(false);
 const checkForCompletion = ref(false);
-const mileageCost = ref(1);
+const mileagePreference = useMileagePreference();
 
 const editor = reactive<Rule>({
   id: "",
@@ -392,7 +395,10 @@ const deleteRule = () => {
 const persistRules = async () => {
   const response = await fetch(`${API_BASE}/rules`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
     body: JSON.stringify(rules.value),
   });
   if (!response.ok) {
@@ -423,13 +429,17 @@ const validateFile = async () => {
   validating.value = true;
   const payload = new FormData();
   payload.append("file", selectedFile.value);
-  payload.append("rule_ids", JSON.stringify(selectedRuleIds.value));
-  payload.append("discipline_filter", String(disciplineFilter.value));
-  payload.append("check_for_completion", String(checkForCompletion.value));
-  payload.append("mileage_cost", String(mileageCost.value));
+    payload.append("rule_ids", JSON.stringify(selectedRuleIds.value));
+    payload.append("discipline_filter", String(disciplineFilter.value));
+    payload.append("check_for_completion", String(checkForCompletion.value));
+    payload.append("mileage_cost", String(mileagePreference.value));
 
   try {
-    const response = await fetch(`${API_BASE}/validate`, { method: "POST", body: payload });
+    const response = await fetch(`${API_BASE}/validate`, {
+      method: "POST",
+      body: payload,
+      headers: authHeaders(),
+    });
     if (!response.ok) {
       const error = await response.json();
       validationError.value = error.detail || "Validation failed.";

@@ -25,7 +25,7 @@
         <div class="mt-4 text-left text-sm">
           <label class="text-xs text-slate-400">Mileage Cost Multiplier</label>
           <input
-            v-model.number="mileageCost"
+            v-model.number="mileagePreference"
             type="number"
             step="0.01"
             min="0"
@@ -92,6 +92,9 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
+import { authHeaders } from "../auth";
+import { useMileagePreference } from "../preferences";
+
 const API_BASE = "http://127.0.0.1:8000";
 
 const selectedFile = ref<File | null>(null);
@@ -99,7 +102,7 @@ const processing = ref(false);
 const reportId = ref("");
 const error = ref("");
 const summary = ref<any>(null);
-const mileageCost = ref(1);
+const mileagePreference = useMileagePreference();
 
 const onFilePick = (event: Event) => {
   const input = event.target as HTMLInputElement;
@@ -122,12 +125,13 @@ const processFile = async () => {
 
   const payload = new FormData();
   payload.append("file", selectedFile.value);
-  payload.append("mileage_cost", String(mileageCost.value));
+  payload.append("mileage_cost", String(mileagePreference.value));
 
   try {
     const response = await fetch(`${API_BASE}/process-payroll-summary`, {
       method: "POST",
       body: payload,
+      headers: authHeaders(),
     });
     if (!response.ok) {
       const data = await response.json();

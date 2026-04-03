@@ -19,7 +19,7 @@
         <div v-if="importType === 'payroll_summary'" class="mt-4">
           <label class="text-xs text-slate-400">Mileage Cost Multiplier</label>
           <input
-            v-model.number="mileageCost"
+            v-model.number="mileagePreference"
             type="number"
             step="0.01"
             min="0"
@@ -43,6 +43,7 @@
           {{ uploading ? "Importing..." : "Import" }}
         </button>
         <button
+          v-if="isAdmin"
           class="mt-2 rounded-md border border-rose-700 px-4 py-2 text-xs font-semibold text-rose-300 hover:border-rose-500 hover:text-rose-200"
           :disabled="clearing"
           @click="clearEmployeeData"
@@ -115,13 +116,16 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+
+import { authHeaders, authState } from "../auth";
+import { useMileagePreference } from "../preferences";
 
 const API_BASE = "http://127.0.0.1:8000";
 
 const selectedFile = ref<File | null>(null);
 const importType = ref<"generic" | "payroll_summary">("generic");
-const mileageCost = ref(1);
+const mileagePreference = useMileagePreference();
 const uploading = ref(false);
 const clearing = ref(false);
 const uploadError = ref("");
@@ -130,6 +134,7 @@ const clearMessage = ref("");
 
 const imports = ref<any[]>([]);
 const importStats = ref<any>(null);
+const isAdmin = computed(() => authState.role === "admin");
 
 const onPickFile = (event: Event) => {
   const input = event.target as HTMLInputElement;
@@ -147,12 +152,16 @@ const uploadFile = async () => {
   const payload = new FormData();
   payload.append("file", selectedFile.value);
   if (importType.value === "payroll_summary") {
-    payload.append("mileage_cost", String(mileageCost.value));
+    payload.append("mileage_cost", String(mileagePreference.value));
   }
 
   try {
     const endpoint = importType.value === "payroll_summary" ? "/imports/payroll-summary" : "/imports";
-    const response = await fetch(`${API_BASE}${endpoint}`, { method: "POST", body: payload });
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      method: "POST",
+      body: payload,
+      headers: authHeaders(),
+    });
     if (!response.ok) {
       const err = await response.json();
       uploadError.value = err.detail || "Import failed.";
@@ -179,7 +188,10 @@ const clearEmployeeData = async () => {
   uploadError.value = "";
   clearMessage.value = "";
   try {
-    const response = await fetch(`${API_BASE}/admin/clear-employee-data`, { method: "POST" });
+    const response = await fetch(`${API_BASE}/admin/clear-employee-data`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
     if (!response.ok) {
       const err = await response.json();
       uploadError.value = err.detail || "Failed to clear employee data.";

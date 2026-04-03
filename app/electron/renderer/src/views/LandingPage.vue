@@ -1,14 +1,20 @@
 <template>
   <main class="px-8 py-10">
     <section class="rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 p-6">
-      <div class="flex items-center justify-between">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 class="text-xl font-semibold">Operations Dashboard</h2>
           <p class="mt-1 text-sm text-slate-400">Active employee records, task mix, and daily spending trends.</p>
         </div>
-        <button class="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500" @click="loadMetrics">
-          Refresh
-        </button>
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/70 px-3 py-2 text-xs text-slate-300">
+            <input v-model="dashboardIncludeHistory" type="checkbox" />
+            Include history
+          </label>
+          <button class="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:border-slate-500" @click="loadMetrics">
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div class="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-6 text-xs text-slate-300">
@@ -76,8 +82,22 @@
     </section>
 
     <section class="mt-8">
+      <div class="mb-4 flex items-center justify-between">
+        <div>
+          <h3 class="text-lg font-semibold text-white">Workspace Shortcuts</h3>
+          <p class="mt-1 text-sm text-slate-400">Open the main areas people use every day.</p>
+        </div>
+        <router-link
+          v-if="canSeeTools"
+          to="/tools"
+          class="inline-flex items-center rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-xs font-semibold text-cyan-200 transition hover:border-cyan-300/50 hover:text-cyan-100"
+        >
+          Open Tools Center
+        </router-link>
+      </div>
+
       <div class="grid gap-6 sm:grid-cols-2">
-        <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-[0_20px_60px_-35px_rgba(15,23,42,0.6)]">
+        <div v-if="canManageImports" class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-[0_20px_60px_-35px_rgba(15,23,42,0.6)]">
           <h2 class="text-xl font-semibold">Imports Workspace</h2>
           <p class="mt-2 text-sm text-slate-400">
             Ingest spreadsheets into the local database for daily usage and analytics.
@@ -102,27 +122,39 @@
           </router-link>
         </div>
         <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-[0_20px_60px_-35px_rgba(15,23,42,0.6)]">
-          <h2 class="text-xl font-semibold">Employee Classifier Tool</h2>
+          <h2 class="text-xl font-semibold">Payments Workspace</h2>
           <p class="mt-2 text-sm text-slate-400">
-            Classify employee records, apply rules, and export reports.
+            Track contractor and employee payments, upload payment backups, and build toward 480-ready totals.
           </p>
           <router-link
-            to="/payroll"
-            class="mt-6 inline-flex items-center rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-slate-900 hover:bg-indigo-400"
+            to="/payments"
+            class="mt-6 inline-flex items-center rounded-md bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-900 hover:bg-emerald-400"
           >
-            Open Employee Classifier Tool
+            Open Payments
           </router-link>
         </div>
         <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-[0_20px_60px_-35px_rgba(15,23,42,0.6)]">
-          <h2 class="text-xl font-semibold">Payroll Summary Extractor</h2>
+          <h2 class="text-xl font-semibold">Payment Profiles</h2>
           <p class="mt-2 text-sm text-slate-400">
-            Read employee sections after Payroll Summary markers and generate employee totals.
+            Maintain reusable payer and payee profiles so 480.6SP drafts can be generated from saved company and vendor details.
           </p>
           <router-link
-            to="/payroll-summary"
-            class="mt-6 inline-flex items-center rounded-md bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-900 hover:bg-emerald-400"
+            to="/payment-profiles"
+            class="mt-6 inline-flex items-center rounded-md bg-cyan-500 px-4 py-2 text-xs font-semibold text-slate-900 hover:bg-cyan-400"
           >
-            Open Payroll Summary Extractor
+            Open Payment Profiles
+          </router-link>
+        </div>
+        <div v-if="canSeeTools" class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-[0_20px_60px_-35px_rgba(15,23,42,0.6)]">
+          <h2 class="text-xl font-semibold">Tools Center</h2>
+          <p class="mt-2 text-sm text-slate-400">
+            Open the report-generation workspace for the Employee Classifier and Payroll Summary Extractor.
+          </p>
+          <router-link
+            to="/tools"
+            class="mt-6 inline-flex items-center rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-slate-900 hover:bg-indigo-400"
+          >
+            Open Tools Center
           </router-link>
         </div>
       </div>
@@ -131,7 +163,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive } from "vue";
+import { computed, onMounted, reactive, watch } from "vue";
 import { Bar, Line } from "vue-chartjs";
 import {
   CategoryScale,
@@ -144,6 +176,8 @@ import {
   Title,
   Tooltip,
 } from "chart.js";
+import { hasRoleAccess } from "../auth";
+import { preferencesState, setDashboardIncludeHistory } from "../preferences";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend);
 
@@ -161,6 +195,15 @@ const metrics = reactive<any>({
   by_classification: [],
   by_task: [],
   by_date: [],
+});
+
+const canSeeTools = computed(() => hasRoleAccess(["admin", "operator"]));
+const canManageImports = computed(() => hasRoleAccess(["admin", "operator"]));
+const dashboardIncludeHistory = computed({
+  get: () => preferencesState.dashboardIncludeHistory,
+  set: (value: boolean) => {
+    setDashboardIncludeHistory(value);
+  },
 });
 
 const baseChartOptions = {
@@ -235,7 +278,8 @@ const patientTrendData = computed(() => ({
 }));
 
 const loadMetrics = async () => {
-  const response = await fetch(`${API_BASE}/dashboard/metrics`);
+  const query = dashboardIncludeHistory.value ? "?include_history=true" : "";
+  const response = await fetch(`${API_BASE}/dashboard/metrics${query}`);
   if (!response.ok) {
     return;
   }
@@ -252,6 +296,10 @@ const currency = (value: number) =>
 const number = (value: number) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(Number(value || 0));
 
 onMounted(async () => {
+  await loadMetrics();
+});
+
+watch(dashboardIncludeHistory, async () => {
   await loadMetrics();
 });
 </script>
